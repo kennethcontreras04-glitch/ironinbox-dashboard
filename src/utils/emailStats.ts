@@ -54,7 +54,7 @@ export function computeEmailStats(input: {
   detectionActions?: DetectionActions;
 }): EmailStats {
   const { flaggedEmails, releasedEmails = [], keywords, incidents, detectionActions } = input;
-  const visibleFlagged = filterVisibleFlaggedEmails(flaggedEmails, keywords, detectionActions);
+  const visibleFlagged = filterVisibleFlaggedEmails(flaggedEmails, keywords);
   const totalFlagged = visibleFlagged.length;
   const totalReleased = releasedEmails.length || input.releasedCount || 0;
   const totalProcessed = totalFlagged + totalReleased;

@@ -35,7 +35,6 @@ const Dashboard: React.FC = () => {
 
   useEngagementTracker('dashboard');
 
-
   const stats = useMemo(
     () => computeEmailStats({ flaggedEmails, releasedEmails, keywords, incidents, detectionActions }),
     [flaggedEmails, releasedEmails, keywords, incidents, detectionActions]
