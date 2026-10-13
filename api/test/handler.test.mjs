@@ -91,6 +91,34 @@ test('concurrent mailbox changes return a retryable conflict', async () => {
   assert.equal(result.status, 409);
   assert.match(result.jsonBody.error, /retry/);
 });
+test('saves detection settings per user and wipe deletes them', async () => {
+  const s = setup();
+  const { cookie } = await login(s);
+  const payload = {
+    keywords: [{ id: '1', value: 'wire-transfer', createdAt: '2026-01-01', enabled: true }],
+    detectionOptions: { caseInsensitive: false, matchInSubject: true, matchInBody: false, wholeWordOnly: true },
+    detectionActions: { flagEmail: false, logMatch: true, showInDashboard: false },
+    riskThreshold: 40,
+    incidents: [{ id: 'INC-2026-AAA', createdTime: 'now', reporter: 'a', subject: 'phishing', priority: 'High', status: 'Open', dueDate: 'Tomorrow', description: 'd' }],
+  };
+  const saved = await s.request('/api/workspace', 'POST', cookie, env.FRONTEND_URL, payload);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.jsonBody.keywords[0].value, 'wire-transfer');
+  assert.equal(saved.jsonBody.detectionActions.flagEmail, false);
+  assert.equal(saved.jsonBody.riskThreshold, 40);
+  assert.equal((await s.request('/api/workspace', 'POST', cookie, env.FRONTEND_URL, { riskThreshold: 'nope' })).status, 400);
+  await s.request('/api/auth/logout', 'POST', cookie);
+  const again = await login(s);
+  const restored = await s.request('/api/workspace', 'GET', again.cookie);
+  assert.equal(restored.jsonBody.saved, true);
+  assert.equal(restored.jsonBody.keywords[0].value, 'wire-transfer');
+  assert.equal(restored.jsonBody.incidents[0].id, 'INC-2026-AAA');
+  assert.equal(JSON.stringify([...s.records]).includes('wire-transfer'), false);
+  await s.request('/api/data/wipe', 'POST', again.cookie);
+  const third = await login(s);
+  const empty = await s.request('/api/workspace', 'GET', third.cookie);
+  assert.equal(empty.jsonBody.saved, false);
+});
 test('classification settings and reviews survive subsequent syncs', async () => {
   const s = setup();
   const { cookie } = await login(s);

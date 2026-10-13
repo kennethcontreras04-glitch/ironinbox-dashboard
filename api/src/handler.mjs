@@ -9,6 +9,96 @@ const currentRecord = record => record?.schemaVersion === SCHEMA_VERSION && reco
 const clientMessages = account => Object.values(account.messages).filter(currentRecord)
   .map(record => presentStoredEmail(record, account.settings))
   .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+const workspaceKey = uid => `workspaces/${hash(uid)}`;
+const clip = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
+function sanitizeKeyword(item) {
+  if (!item || typeof item !== 'object') return null;
+  const value = clip(item.value, 200).trim();
+  if (!value) return null;
+  return {
+    id: clip(item.id, 64) || String(Date.now()),
+    value,
+    createdAt: clip(item.createdAt, 40) || new Date().toISOString(),
+    enabled: item.enabled !== false,
+  };
+}
+function sanitizeIncidentEmail(email) {
+  if (!email || typeof email !== 'object') return undefined;
+  return {
+    id: clip(email.id, 128),
+    sender: clip(email.sender, 300),
+    senderEmail: clip(email.senderEmail, 320),
+    senderDomain: clip(email.senderDomain, 253),
+    subject: clip(email.subject, 500),
+    received: clip(email.received, 80),
+    receivedAt: clip(email.receivedAt, 40),
+    riskLevel: ['Critical', 'High', 'Medium', 'Low'].includes(email.riskLevel) ? email.riskLevel : 'Medium',
+    riskScore: Number.isFinite(Number(email.riskScore)) ? Math.max(0, Math.min(100, Number(email.riskScore))) : 0,
+    signals: Array.isArray(email.signals) ? email.signals.slice(0, 40).map(signal => ({
+      type: signal?.type === 'typo' ? 'typo' : 'keyword',
+      value: clip(signal?.value, 200),
+      description: clip(signal?.description, 400),
+      detector: clip(signal?.detector, 40),
+    })) : [],
+    auth: email.auth && typeof email.auth === 'object' ? {
+      spf: clip(email.auth.spf, 40), dkim: clip(email.auth.dkim, 40), dmarc: clip(email.auth.dmarc, 40),
+    } : undefined,
+    links: Array.isArray(email.links) ? email.links.slice(0, 30).map(link => ({
+      href: clip(link?.href, 500), text: clip(link?.text, 200), host: clip(link?.host, 253),
+    })) : [],
+    attachments: Array.isArray(email.attachments) ? email.attachments.slice(0, 20).map(file => ({
+      filename: clip(file?.filename, 200), mimeType: clip(file?.mimeType, 120),
+      size: Number.isFinite(Number(file?.size)) ? Math.max(0, Number(file.size)) : 0,
+    })) : [],
+    snippet: clip(email.snippet, 500),
+    content: clip(email.content, 8000),
+    disposition: email.disposition === 'safe' ? 'safe' : email.disposition === 'flagged' ? 'flagged' : undefined,
+  };
+}
+function sanitizeIncident(item) {
+  if (!item || typeof item !== 'object') return null;
+  const id = clip(item.id, 64);
+  if (!id) return null;
+  return {
+    id,
+    createdTime: clip(item.createdTime, 80) || 'Just now',
+    reporter: clip(item.reporter, 120) || 'Current User',
+    subject: clip(item.subject, 500),
+    priority: ['Critical', 'High', 'Medium', 'Low'].includes(item.priority) ? item.priority : 'Medium',
+    status: ['Open', 'In Progress', 'Resolved'].includes(item.status) ? item.status : 'Open',
+    dueDate: clip(item.dueDate, 80),
+    description: clip(item.description, 4000),
+    category: clip(item.category, 80),
+    assignedTo: clip(item.assignedTo, 120),
+    source: clip(item.source, 80),
+    sourceEmailId: clip(item.sourceEmailId, 128),
+    sourceEmail: sanitizeIncidentEmail(item.sourceEmail),
+  };
+}
+function parseWorkspace(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail(400, 'A JSON object is required.');
+  if (body.keywords !== undefined && !Array.isArray(body.keywords)) throw fail(400, 'keywords must be an array.');
+  if (body.incidents !== undefined && !Array.isArray(body.incidents)) throw fail(400, 'incidents must be an array.');
+  if (body.riskThreshold !== undefined && !Number.isFinite(Number(body.riskThreshold))) throw fail(400, 'riskThreshold must be a number.');
+  const options = body.detectionOptions && typeof body.detectionOptions === 'object' ? body.detectionOptions : {};
+  const actions = body.detectionActions && typeof body.detectionActions === 'object' ? body.detectionActions : {};
+  return {
+    keywords: Array.isArray(body.keywords) ? body.keywords.map(sanitizeKeyword).filter(Boolean).slice(0, 200) : [],
+    detectionOptions: {
+      caseInsensitive: options.caseInsensitive !== false,
+      matchInSubject: options.matchInSubject !== false,
+      matchInBody: options.matchInBody !== false,
+      wholeWordOnly: options.wholeWordOnly === true,
+    },
+    detectionActions: {
+      flagEmail: actions.flagEmail !== false,
+      logMatch: actions.logMatch !== false,
+      showInDashboard: actions.showInDashboard !== false,
+    },
+    riskThreshold: body.riskThreshold === undefined ? 50 : Math.max(0, Math.min(100, Number(body.riskThreshold))),
+    incidents: Array.isArray(body.incidents) ? body.incidents.map(sanitizeIncident).filter(Boolean).slice(0, 100) : [],
+  };
+}
 async function readJson(request) {
   try { return await request.json(); } catch { throw fail(400, 'A valid JSON body is required.'); }
 }
@@ -87,9 +177,26 @@ export function createHandler({ env, storage, fetcher = fetch }) {
       if (request.method === 'GET' && path === '/api/gmail/status') return json(200, {
         connected: true, uid: account.uid, email: account.email, lastSyncedAt: account.lastSyncedAt,
       });
-      if (request.method === 'POST' && ['/api/auth/logout', '/api/gmail/disconnect', '/api/data/wipe'].includes(path)) {
+      if (request.method === 'POST' && path === '/api/data/wipe') {
+        const storedWorkspace = await storage.read(workspaceKey(account.uid));
+        if (storedWorkspace) await storage.remove(workspaceKey(account.uid), storedWorkspace.etag);
         await storage.remove(sessionKey, record.etag);
         return json(200, { disconnected: true, wiped: true }, [cookie('ironinbox_session', '', 0)]);
+      }
+      if (request.method === 'POST' && ['/api/auth/logout', '/api/gmail/disconnect'].includes(path)) {
+        await storage.remove(sessionKey, record.etag);
+        return json(200, { disconnected: true, wiped: true }, [cookie('ironinbox_session', '', 0)]);
+      }
+      if (request.method === 'GET' && path === '/api/workspace') {
+        const storedWorkspace = await storage.read(workspaceKey(account.uid));
+        if (!storedWorkspace) return json(200, { saved: false });
+        return json(200, { saved: true, ...decrypt(storedWorkspace.value.encrypted) });
+      }
+      if (request.method === 'POST' && path === '/api/workspace') {
+        const workspace = parseWorkspace(await readJson(request));
+        const storedWorkspace = await storage.read(workspaceKey(account.uid));
+        await storage.write(workspaceKey(account.uid), { encrypted: encrypt(workspace) }, storedWorkspace?.etag);
+        return json(200, { saved: true, ...workspace });
       }
       if (request.method === 'POST' && path === '/api/gmail/sync') {
         const body = await readJson(request);

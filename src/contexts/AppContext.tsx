@@ -7,30 +7,75 @@ import {
   DetectionOptions,
   DetectionActions,
   EmailDisposition,
-  EmailSourceProvider
+  EmailSourceProvider,
+  Incident,
+  AppNotification,
+  WorkspaceSaveStatus,
 } from '../types';
 import { defaultKeywords } from '../data/defaultKeywords';
 import { useSettings } from './useSettings';
 import { useAuth } from './useAuth';
+import { createIncidentFromEmail, createIncidentId, incidentForEmail } from '../utils/incidents';
+import { buildNotifications } from '../utils/notifications';
 
 const EMPTY_FLAGGED_EMAILS: FlaggedEmail[] = [];
 const EMPTY_KEYWORDS: Keyword[] = [];
 const EMPTY_RELEASED_EMAILS: ReleasedEmail[] = [];
-
-export type AppIncident = {
-  id: string;
-  createdTime: string;
-  reporter: string;
-  subject: string;
-  priority: 'Critical' | 'High' | 'Medium' | 'Low';
-  status: 'Open' | 'In Progress' | 'Resolved';
-  dueDate: string;
-  description: string;
-  category?: string;
-  assignedTo?: string;
-  source?: string;
-  sourceEmailId?: string;
+const DEFAULT_OPTIONS: DetectionOptions = {
+  caseInsensitive: true,
+  matchInSubject: true,
+  matchInBody: true,
+  wholeWordOnly: false,
 };
+const DEFAULT_ACTIONS: DetectionActions = {
+  flagEmail: true,
+  logMatch: true,
+  showInDashboard: true,
+};
+
+type WorkspacePayload = {
+  keywords: Keyword[];
+  detectionOptions: DetectionOptions;
+  detectionActions: DetectionActions;
+  riskThreshold: number;
+  incidents: Incident[];
+};
+
+function workspaceLocalKey(uid: string) {
+  return `ironinbox_workspace_${uid}`;
+}
+
+function notificationReadKey(uid: string) {
+  return `ironinbox_notifications_read_${uid}`;
+}
+
+function readLocalWorkspace(uid: string): WorkspacePayload | null {
+  try {
+    const raw = localStorage.getItem(workspaceLocalKey(uid));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkspacePayload;
+    if (!parsed || !Array.isArray(parsed.keywords)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalWorkspace(uid: string, payload: WorkspacePayload) {
+  try {
+    localStorage.setItem(workspaceLocalKey(uid), JSON.stringify(payload));
+  } catch { /* Workspace still lives in memory when browser storage is unavailable. */ }
+}
+
+function loadNotificationReadIds(uid: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(notificationReadKey(uid));
+    const parsed = JSON.parse(raw || '[]');
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
 
 export interface AppContextType {
   flaggedEmails: FlaggedEmail[];
@@ -39,22 +84,29 @@ export interface AppContextType {
   detectionOptions: DetectionOptions;
   detectionActions: DetectionActions;
   selectedEmail: FlaggedEmail | null;
-  linkedIncidents: AppIncident[];
+  incidents: Incident[];
+  notifications: AppNotification[];
+  workspaceSaveStatus: WorkspaceSaveStatus;
   setSelectedEmail: (email: FlaggedEmail | null) => void;
   createIncidentFromFlaggedEmail: (
     email: FlaggedEmail,
     options: { dueDate: string; assignedTo?: string }
-  ) => AppIncident;
+  ) => Incident;
+  upsertIncident: (incident: Incident) => void;
+  createManualIncident: (draft: Omit<Incident, 'id' | 'createdTime'> & Partial<Pick<Incident, 'id' | 'createdTime'>>) => Incident;
   releaseEmail: (emailId: string) => void;
   toggleStarReleasedEmail: (releasedId: string) => void;
   toggleReadReleasedEmail: (releasedId: string, isRead?: boolean) => void;
   reFlagReleasedEmails: (releasedIds: string[]) => void;
-  addKeyword: (keyword: string) => void;
+  addKeyword: (keyword: string) => boolean;
   deleteKeyword: (keywordId: string) => void;
   toggleKeyword: (id: string) => void;
-  updateKeyword: (id: string, text: string) => void;
+  updateKeyword: (id: string, text: string) => boolean;
   updateDetectionOptions: (options: Partial<DetectionOptions>) => void;
   updateDetectionActions: (actions: Partial<DetectionActions>) => void;
+  saveWorkspace: () => Promise<void>;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
   syncMailbox: () => Promise<void>;
   mailboxSyncing: boolean;
   mailboxError: string | null;
@@ -64,32 +116,30 @@ export interface AppContextType {
 }
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { riskFlagThreshold } = useSettings();
+  const { riskFlagThreshold, setRiskFlagThreshold, advanced } = useSettings();
   const { user, accountIntegrations } = useAuth();
   const [isWiped, setIsWiped] = useState(false);
   const [flaggedEmails, setFlaggedEmails] = useState<FlaggedEmail[]>([]);
   const [releasedEmails, setReleasedEmails] = useState<ReleasedEmail[]>([]);
   const [keywords, setKeywords] = useState<Keyword[]>(defaultKeywords);
   const [selectedEmail, setSelectedEmail] = useState<FlaggedEmail | null>(null);
-  const [linkedIncidents, setLinkedIncidents] = useState<AppIncident[]>([]);
-  const [detectionOptions, setDetectionOptions] = useState<DetectionOptions>({
-    caseInsensitive: true,
-    matchInSubject: true,
-    matchInBody: true,
-    wholeWordOnly: false
-  });
-  const [detectionActions, setDetectionActions] = useState<DetectionActions>({
-    flagEmail: true,
-    logMatch: true,
-    showInDashboard: true
-  });
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [detectionOptions, setDetectionOptions] = useState<DetectionOptions>(DEFAULT_OPTIONS);
+  const [detectionActions, setDetectionActions] = useState<DetectionActions>(DEFAULT_ACTIONS);
   const [mailboxSyncing, setMailboxSyncing] = useState(false);
   const [mailboxError, setMailboxError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
-  const gradingRef = useRef({ keywords, detectionOptions, riskFlagThreshold, user });
+  const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<WorkspaceSaveStatus>('idle');
+  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
+  const hydratingRef = useRef(true);
+  const readyForResyncRef = useRef(false);
+  const gradingRef = useRef({ keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents });
+  const syncMailboxRef = useRef<() => Promise<void>>(async () => {});
+  const persistWorkspaceRef = useRef<() => Promise<void>>(async () => {});
+
   useEffect(() => {
-    gradingRef.current = { keywords, detectionOptions, riskFlagThreshold, user };
-  }, [keywords, detectionOptions, riskFlagThreshold, user]);
+    gradingRef.current = { keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents };
+  }, [keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents]);
 
   const applyMailboxMessages = (messages: Array<FlaggedEmail & { disposition?: EmailDisposition }>) => {
     setFlaggedEmails(messages.filter((message) => message.disposition === 'flagged'));
@@ -129,28 +179,70 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const syncMailbox = async () => {
-    const { user: currentUser, keywords: currentKeywords, detectionOptions: currentOptions, riskFlagThreshold: currentThreshold } = gradingRef.current;
+    const {
+      user: currentUser,
+      keywords: currentKeywords,
+      detectionOptions: currentOptions,
+      detectionActions: currentActions,
+      riskFlagThreshold: currentThreshold,
+    } = gradingRef.current;
     if (!currentUser?.uid) return;
     setMailboxSyncing(true);
     setMailboxError(null);
     try {
+      const keywordValues = currentActions.flagEmail
+        ? currentKeywords.filter((keyword) => keyword.enabled).map((keyword) => keyword.value)
+        : [];
       for (let batch = 0; batch < 5; batch++) {
         const response = await fetch('/api/gmail/sync', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keywords: currentKeywords.filter(keyword => keyword.enabled).map(keyword => keyword.value), options: currentOptions, threshold: currentThreshold }),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keywords: keywordValues, options: currentOptions, threshold: currentThreshold }),
         });
-        const data = await response.json() as { messages?: Array<FlaggedEmail & { disposition: 'flagged' | 'safe' }>; lastSyncedAt?: string; error?: string; hasMore?: boolean };
+        const data = await response.json() as {
+          messages?: Array<FlaggedEmail & { disposition: 'flagged' | 'safe' }>;
+          lastSyncedAt?: string;
+          error?: string;
+          hasMore?: boolean;
+        };
         if (!response.ok) throw new Error(data.error || 'Unable to sync Gmail.');
         applyMailboxMessages(data.messages || []);
         setLastSyncedAt(data.lastSyncedAt || new Date().toISOString());
         if (!data.hasMore) break;
       }
-
     } catch (error) {
       setMailboxError(error instanceof Error ? error.message : 'Unable to sync Gmail.');
     } finally {
       setMailboxSyncing(false);
     }
   };
+  syncMailboxRef.current = syncMailbox;
+
+  const persistWorkspace = async () => {
+    const currentUser = gradingRef.current.user;
+    if (!currentUser?.uid || hydratingRef.current) return;
+    const payload: WorkspacePayload = {
+      keywords: gradingRef.current.keywords,
+      detectionOptions: gradingRef.current.detectionOptions,
+      detectionActions: gradingRef.current.detectionActions,
+      riskThreshold: gradingRef.current.riskFlagThreshold,
+      incidents: gradingRef.current.incidents,
+    };
+    writeLocalWorkspace(currentUser.uid, payload);
+    setWorkspaceSaveStatus('saving');
+    try {
+      const response = await fetch('/api/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error('Unable to save workspace.');
+      setWorkspaceSaveStatus('saved');
+    } catch {
+      setWorkspaceSaveStatus('error');
+    }
+  };
+  persistWorkspaceRef.current = persistWorkspace;
 
   const connectedProviders = useMemo(() => {
     const set = new Set<EmailSourceProvider>();
@@ -163,38 +255,103 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const integrationSnapshot = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!user) {
+    let cancelled = false;
+    if (!user?.uid) {
+      hydratingRef.current = true;
+      readyForResyncRef.current = false;
       setFlaggedEmails(EMPTY_FLAGGED_EMAILS);
       setReleasedEmails(EMPTY_RELEASED_EMAILS);
       setSelectedEmail(null);
-      setLinkedIncidents([]);
+      setIncidents([]);
+      setKeywords(defaultKeywords);
+      setDetectionOptions(DEFAULT_OPTIONS);
+      setDetectionActions(DEFAULT_ACTIONS);
       setIsWiped(false);
+      setReadNotificationIds(new Set());
       integrationSnapshot.current = null;
       return;
     }
+
+    hydratingRef.current = true;
+    readyForResyncRef.current = false;
     setFlaggedEmails([]);
     setReleasedEmails([]);
-    setKeywords(defaultKeywords);
     setSelectedEmail(null);
-    setLinkedIncidents([]);
     setIsWiped(false);
     integrationSnapshot.current = null;
-  }, [user]);
+    setReadNotificationIds(loadNotificationReadIds(user.uid));
+
+    const local = readLocalWorkspace(user.uid);
+    if (local) {
+      setKeywords(local.keywords.length ? local.keywords : defaultKeywords);
+      if (local.detectionOptions) setDetectionOptions({ ...DEFAULT_OPTIONS, ...local.detectionOptions });
+      if (local.detectionActions) setDetectionActions({ ...DEFAULT_ACTIONS, ...local.detectionActions });
+      if (Number.isFinite(local.riskThreshold)) setRiskFlagThreshold(local.riskThreshold);
+      setIncidents(Array.isArray(local.incidents) ? local.incidents : []);
+    } else {
+      setKeywords(defaultKeywords);
+      setDetectionOptions(DEFAULT_OPTIONS);
+      setDetectionActions(DEFAULT_ACTIONS);
+      setIncidents([]);
+    }
+
+    void (async () => {
+      try {
+        const response = await fetch('/api/workspace');
+        if (!response.ok) throw new Error('workspace');
+        const data = await response.json() as Partial<WorkspacePayload> & { saved?: boolean };
+        if (cancelled) return;
+        if (data.saved) {
+          if (Array.isArray(data.keywords)) setKeywords(data.keywords);
+          if (data.detectionOptions) setDetectionOptions({ ...DEFAULT_OPTIONS, ...data.detectionOptions });
+          if (data.detectionActions) setDetectionActions({ ...DEFAULT_ACTIONS, ...data.detectionActions });
+          if (Number.isFinite(Number(data.riskThreshold))) setRiskFlagThreshold(Number(data.riskThreshold));
+          if (Array.isArray(data.incidents)) setIncidents(data.incidents);
+          writeLocalWorkspace(user.uid, {
+            keywords: Array.isArray(data.keywords) ? data.keywords : defaultKeywords,
+            detectionOptions: { ...DEFAULT_OPTIONS, ...data.detectionOptions },
+            detectionActions: { ...DEFAULT_ACTIONS, ...data.detectionActions },
+            riskThreshold: Number(data.riskThreshold) || 50,
+            incidents: Array.isArray(data.incidents) ? data.incidents : [],
+          });
+        }
+      } catch {
+        // Keep locally cached settings instead of replacing them with defaults.
+      }
+      if (cancelled) return;
+      hydratingRef.current = false;
+      await syncMailboxRef.current();
+      readyForResyncRef.current = true;
+    })();
+
+    return () => { cancelled = true; };
+  }, [user?.uid, setRiskFlagThreshold]);
 
   useEffect(() => {
     if (!user?.uid) return;
-    void syncMailbox();
-    // First load for this signed-in mailbox; settings-driven sync is debounced below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const timer = window.setTimeout(() => { void syncMailbox(); }, 1500);
+    const timer = window.setTimeout(() => {
+      if (!readyForResyncRef.current) return;
+      void syncMailboxRef.current();
+    }, 1500);
     return () => window.clearTimeout(timer);
-    // Re-grade after keyword, option, or threshold edits. Login already syncs immediately.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keywords, detectionOptions, riskFlagThreshold]);
+  }, [keywords, detectionOptions, detectionActions.flagEmail, riskFlagThreshold, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const timer = window.setTimeout(() => {
+      if (hydratingRef.current) return;
+      void persistWorkspaceRef.current();
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [keywords, detectionOptions, detectionActions, incidents, riskFlagThreshold, user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid || !advanced.autoRefresh) return;
+    const interval = window.setInterval(() => {
+      void syncMailboxRef.current();
+    }, advanced.refreshInterval);
+    return () => window.clearInterval(interval);
+  }, [user?.uid, advanced.autoRefresh, advanced.refreshInterval]);
 
   useEffect(() => {
     if (!user || accountIntegrations.length === 0) return;
@@ -214,17 +371,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     integrationSnapshot.current = key;
     if (disconnected.length === 0) return;
 
-    setFlaggedEmails((prevEmails) => {
-      const removedIds = prevEmails
-        .filter((e) => disconnected.includes(e.sourceProvider))
-        .map((e) => e.id);
-      if (removedIds.length > 0) {
-        queueMicrotask(() => {
-          setLinkedIncidents((li) => li.filter((inc) => !removedIds.includes(inc.sourceEmailId || '')));
-        });
-      }
-      return prevEmails.filter((e) => !disconnected.includes(e.sourceProvider));
-    });
+    setFlaggedEmails((prevEmails) => prevEmails.filter((e) => !disconnected.includes(e.sourceProvider)));
     setReleasedEmails((prevR) =>
       prevR.filter((r) => !disconnected.includes(r.originalEmail.sourceProvider))
     );
@@ -251,6 +398,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [isWiped, releasedEmails, user, accountIntegrations.length, connectedProviders]);
 
   const displayedSelectedEmail = isWiped ? null : selectedEmail;
+  const displayedIncidents = isWiped ? [] : incidents;
+
+  const notifications = useMemo(
+    () => buildNotifications({
+      flaggedEmails: displayedFlaggedEmails,
+      keywords: displayedKeywords,
+      incidents: displayedIncidents,
+      mailboxError,
+      readIds: readNotificationIds,
+      detectionActions,
+    }),
+    [displayedFlaggedEmails, displayedKeywords, displayedIncidents, mailboxError, readNotificationIds, detectionActions]
+  );
 
   const wipeAllData = async () => {
     if (user?.uid) {
@@ -258,12 +418,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
       });
       if (!response.ok) throw new Error('Unable to wipe mailbox data. Please try again.');
+      try {
+        localStorage.removeItem(workspaceLocalKey(user.uid));
+        localStorage.removeItem(notificationReadKey(user.uid));
+      } catch { /* Server wipe already removed the durable copy. */ }
     }
     setIsWiped(true);
-    setLinkedIncidents([]);
+    setIncidents([]);
     setSelectedEmail(null);
     setFlaggedEmails([]);
     setReleasedEmails([]);
+    setKeywords(defaultKeywords);
+    setDetectionOptions(DEFAULT_OPTIONS);
+    setDetectionActions(DEFAULT_ACTIONS);
+    setReadNotificationIds(new Set());
   };
 
   const releaseEmail = (emailId: string) => {
@@ -289,13 +457,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addKeyword = (keyword: string) => {
+    const trimmed = keyword.trim();
+    if (!trimmed) return false;
+    if (keywords.some((item) => item.value.trim().toLowerCase() === trimmed.toLowerCase())) return false;
     const newKeyword: Keyword = {
       id: Date.now().toString(),
-      value: keyword,
+      value: trimmed,
       createdAt: new Date().toISOString(),
       enabled: true
     };
     setKeywords(prev => [...prev, newKeyword]);
+    return true;
   };
 
   const deleteKeyword = (keywordId: string) => {
@@ -312,12 +484,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const updateKeyword = (keywordId: string, value: string) => {
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
+    if (keywords.some((item) => item.id !== keywordId && item.value.trim().toLowerCase() === trimmed.toLowerCase())) {
+      return false;
+    }
     setKeywords(prev =>
       prev.map(kw =>
         kw.id === keywordId ? { ...kw, value: trimmed } : kw
       )
     );
+    return true;
   };
 
   const toggleStarReleasedEmail = (releasedId: string) => {
@@ -361,25 +537,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     email: FlaggedEmail,
     options: { dueDate: string; assignedTo?: string }
   ) => {
-    const now = new Date();
-    const suffix = String(now.getTime()).slice(-4);
-    const incident: AppIncident = {
-      id: `INC-LINK-${suffix}`,
-      createdTime: 'Just now',
-      reporter: 'Flagged Email Workflow',
-      subject: `Email Threat Investigation: ${email.subject}`,
-      priority: email.riskLevel,
-      status: 'Open',
-      dueDate: options.dueDate,
-      description: `A flagged email was automatically escalated for investigation after detection controls identified multiple suspicious indicators in the message context and content. The email was received from ${email.sender} on ${email.received} and classified as ${email.riskLevel.toLowerCase()} risk based on the triggered rules.\n\nInitial analysis found the following indicators: ${email.signals.map(signal => `${signal.type} match "${signal.value}"`).join(', ')}. Analysts should validate sender legitimacy, review embedded links or attachments, and confirm whether recipient interaction occurred before containment and remediation actions are finalized.`,
-      category: 'Email Security',
-      assignedTo: options.assignedTo || 'SOC Team',
-      source: 'Flagged Email',
-      sourceEmailId: email.id
-    };
-
-    setLinkedIncidents(prev => [incident, ...prev]);
+    const existing = incidentForEmail(incidents, email.id);
+    if (existing) return existing;
+    const incident = createIncidentFromEmail(email, { ...options, reporter: user?.email || 'Flagged Email Workflow' }, incidents);
+    setIncidents(prev => [incident, ...prev]);
     return incident;
+  };
+
+  const upsertIncident = (incident: Incident) => {
+    setIncidents((prev) => {
+      const without = prev.filter((item) => item.id !== incident.id);
+      return [incident, ...without];
+    });
+  };
+
+  const createManualIncident = (draft: Omit<Incident, 'id' | 'createdTime'> & Partial<Pick<Incident, 'id' | 'createdTime'>>) => {
+    const incident: Incident = {
+      ...draft,
+      id: draft.id && !incidents.some((item) => item.id === draft.id) ? draft.id : createIncidentId(incidents.map((item) => item.id)),
+      createdTime: draft.createdTime || 'Just now',
+    };
+    setIncidents((prev) => [incident, ...prev]);
+    return incident;
+  };
+
+  const persistReadIds = (next: Set<string>) => {
+    setReadNotificationIds(next);
+    if (!user?.uid) return;
+    try {
+      localStorage.setItem(notificationReadKey(user.uid), JSON.stringify([...next]));
+    } catch { /* Unread badges still work for this session. */ }
+  };
+
+  const markNotificationRead = (id: string) => {
+    persistReadIds(new Set([...readNotificationIds, id]));
+  };
+
+  const markAllNotificationsRead = () => {
+    persistReadIds(new Set(notifications.map((item) => item.id)));
   };
 
   return (
@@ -391,9 +586,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         detectionOptions,
         detectionActions,
         selectedEmail: displayedSelectedEmail,
-        linkedIncidents,
+        incidents: displayedIncidents,
+        notifications,
+        workspaceSaveStatus,
         setSelectedEmail,
         createIncidentFromFlaggedEmail,
+        upsertIncident,
+        createManualIncident,
         releaseEmail,
         toggleStarReleasedEmail,
         toggleReadReleasedEmail,
@@ -404,6 +603,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateKeyword,
         updateDetectionOptions,
         updateDetectionActions,
+        saveWorkspace: persistWorkspace,
+        markNotificationRead,
+        markAllNotificationsRead,
         syncMailbox,
         mailboxSyncing,
         mailboxError,

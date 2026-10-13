@@ -99,3 +99,64 @@ export type DetectionActions = {
   logMatch: boolean;
   showInDashboard: boolean;
 }
+
+export type DetectionSettings = {
+  options: DetectionOptions;
+  actions: DetectionActions;
+  riskThreshold: number;
+}
+
+export type IncidentEmailSnapshot = {
+  id: string;
+  sender: string;
+  senderEmail?: string;
+  senderDomain?: string;
+  subject: string;
+  received: string;
+  receivedAt?: string;
+  riskLevel: FlaggedEmail['riskLevel'];
+  riskScore: number;
+  signals: Signal[];
+  auth?: EmailAuthResults;
+  links?: EmailLink[];
+  attachments?: EmailAttachment[];
+  snippet?: string;
+  content?: string;
+  disposition?: EmailDisposition;
+}
+
+export type Incident = {
+  id: string;
+  createdTime: string;
+  reporter: string;
+  subject: string;
+  priority: 'Critical' | 'High' | 'Medium' | 'Low';
+  status: 'Open' | 'In Progress' | 'Resolved';
+  dueDate: string;
+  description: string;
+  category?: string;
+  assignedTo?: string;
+  source?: string;
+  sourceEmailId?: string;
+  sourceEmail?: IncidentEmailSnapshot;
+}
+
+export type NotificationType =
+  | 'critical-email'
+  | 'high-email'
+  | 'keyword-match'
+  | 'open-incident'
+  | 'sync-error';
+
+export type AppNotification = {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  createdAt: string;
+  href: string;
+  read: boolean;
+  sourceId?: string;
+}
+
+export type WorkspaceSaveStatus = 'idle' | 'saving' | 'saved' | 'error';

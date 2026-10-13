@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApp } from '../contexts/useApp';
 import Header from '../components/layout/Header';
 import StatCard from '../components/common/StatCard';
@@ -6,49 +7,56 @@ import EmailDetailModal from '../components/dashboard/EmailDetailModal';
 import RoleGate, { AccessRestrictedBlock } from '../components/common/RoleGate';
 import { useEngagementTracker } from '../utils/useEngagementTracker';
 import { generatePDFReport } from '../utils/pdfExport';
+import { computeEmailStats } from '../utils/emailStats';
+import { incidentForEmail } from '../utils/incidents';
 import {
   filterVisibleFlaggedEmails,
   getVisibleSignals,
-  hasVisibleTypoHit,
-  hasVisibleKeywordHit
 } from '../utils/keywordSignals';
 import { RiAlertLine, RiFireLine, RiKeyLine, RiSearchLine, RiSortDesc } from 'react-icons/ri';
 import { BiEnvelope } from 'react-icons/bi';
 
 type FilterType = 'All' | 'Keyword' | 'Typo' | 'Both';
+type RiskFilter = 'All' | 'Critical' | 'High' | 'Medium' | 'Low';
 type SortType   = 'Risk' | 'Received' | 'Sender' | 'Subject';
 
 const FlaggedEmails: React.FC = () => {
   useEngagementTracker('flagged-emails');
-  const { flaggedEmails, keywords, setSelectedEmail, selectedEmail, releaseEmail } = useApp();
+  const { flaggedEmails, releasedEmails, keywords, incidents, detectionActions, setSelectedEmail, selectedEmail, releaseEmail } = useApp();
+  const [searchParams] = useSearchParams();
   const [searchQuery, setSearchQuery]   = useState('');
   const [filterType, setFilterType]     = useState<FilterType>('All');
+  const [riskFilter, setRiskFilter]     = useState<RiskFilter>('All');
   const [sortBy, setSortBy]             = useState<SortType>('Risk');
   const [currentPage, setCurrentPage]   = useState(1);
   const itemsPerPage = 10;
 
   const visibleFlaggedEmails = useMemo(
-    () => filterVisibleFlaggedEmails(flaggedEmails, keywords),
-    [flaggedEmails, keywords]
+    () => filterVisibleFlaggedEmails(flaggedEmails, keywords, detectionActions),
+    [flaggedEmails, keywords, detectionActions]
   );
 
   React.useEffect(() => {
-    if (!selectedEmail) return;
-    if (!visibleFlaggedEmails.some(e => e.id === selectedEmail.id)) setSelectedEmail(null);
-  }, [visibleFlaggedEmails, selectedEmail, setSelectedEmail]);
+    const emailId = searchParams.get('email');
+    if (!emailId) return;
+    const match = visibleFlaggedEmails.find((email) => email.id === emailId);
+    if (match) setSelectedEmail(match);
+  }, [searchParams, visibleFlaggedEmails, setSelectedEmail]);
 
-  const stats = useMemo(() => {
-    const totalFlagged  = visibleFlaggedEmails.length;
-    const highCritical  = visibleFlaggedEmails.filter(e => e.riskLevel === 'Critical' || e.riskLevel === 'High').length;
-    const keywordHits   = visibleFlaggedEmails.filter(e => hasVisibleKeywordHit(e, keywords)).length;
-    const typoHits      = visibleFlaggedEmails.filter(e => hasVisibleTypoHit(e, keywords)).length;
-    return { totalFlagged, highCritical, keywordHits, typoHits };
-  }, [visibleFlaggedEmails, keywords]);
+  React.useEffect(() => {
+    if (!selectedEmail) return;
+    if (!visibleFlaggedEmails.some(e => e.id === selectedEmail.id) && !searchParams.get('email')) setSelectedEmail(null);
+  }, [visibleFlaggedEmails, selectedEmail, setSelectedEmail, searchParams]);
+
+  const stats = useMemo(
+    () => computeEmailStats({ flaggedEmails, releasedEmails, keywords, incidents, detectionActions }),
+    [flaggedEmails, releasedEmails, keywords, incidents, detectionActions]
+  );
 
   const filteredEmails = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
     const filtered = visibleFlaggedEmails.filter(email => {
-      const signals = getVisibleSignals(email, keywords);
+      const signals = getVisibleSignals(email, keywords, detectionActions);
       if (!query) {
         if (filterType === 'All') return true;
         const hk = signals.some(s => s.type === 'keyword');
@@ -69,7 +77,7 @@ const FlaggedEmails: React.FC = () => {
       if (filterType === 'Typo')    return ht && !hk;
       if (filterType === 'Both')    return hk && ht;
       return true;
-    });
+    }).filter((email) => riskFilter === 'All' || email.riskLevel === riskFilter);
 
     filtered.sort((a, b) => {
       const riskOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -82,7 +90,7 @@ const FlaggedEmails: React.FC = () => {
       }
     });
     return filtered;
-  }, [visibleFlaggedEmails, keywords, searchQuery, filterType, sortBy]);
+  }, [visibleFlaggedEmails, keywords, searchQuery, filterType, riskFilter, sortBy, detectionActions]);
 
   const totalPages      = Math.ceil(filteredEmails.length / itemsPerPage);
   const paginatedEmails = filteredEmails.slice((currentPage-1)*itemsPerPage, currentPage*itemsPerPage);
@@ -92,7 +100,7 @@ const FlaggedEmails: React.FC = () => {
   const normStart = Math.max(1, endPage - paginationWindow + 1);
   const visiblePages = Array.from({ length: Math.max(0, endPage-normStart+1) }, (_, i) => normStart + i);
 
-  React.useEffect(() => { setCurrentPage(1); }, [searchQuery, filterType, sortBy]);
+  React.useEffect(() => { setCurrentPage(1); }, [searchQuery, filterType, riskFilter, sortBy]);
 
   const getRiskBadge = (risk: string) => {
     switch (risk) {
@@ -115,7 +123,7 @@ const FlaggedEmails: React.FC = () => {
   return (
     <RoleGate permission="canViewFlaggedEmails" fallback={<div className="flex-1 flex items-center justify-center bg-slate-50 dark:bg-[var(--dm-bg-page)]"><AccessRestrictedBlock /></div>}>
       <div className="flex-1 overflow-auto bg-slate-50 dark:bg-[var(--dm-bg-page)]">
-        <Header title="Flagged Emails" showActions onExportPDF={() => generatePDFReport(filteredEmails, keywords)} />
+        <Header title="Flagged Emails" showActions onExportPDF={() => generatePDFReport(filteredEmails, keywords, { releasedCount: releasedEmails.length, incidents, detectionActions })} />
 
         <div className="p-6 space-y-4 animate-fade-in max-w-7xl mx-auto">
 
@@ -152,6 +160,18 @@ const FlaggedEmails: React.FC = () => {
                                    ? 'bg-blue-600 text-white dark:bg-blue-600 dark:text-white'
                                    : 'text-slate-500 hover:bg-slate-50 dark:text-[var(--dm-text-faint)] dark:hover:bg-white/[0.03]'}`}>
                       {type}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center rounded-lg border overflow-hidden border-slate-200 dark:border-[var(--dm-border-input)]">
+                  {(['All','Critical','High','Medium','Low'] as RiskFilter[]).map(level => (
+                    <button key={level} onClick={() => setRiskFilter(level)}
+                      className={`px-3 py-1.5 text-xs font-medium transition-colors
+                                 ${riskFilter === level
+                                   ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900'
+                                   : 'text-slate-500 hover:bg-slate-50 dark:text-[var(--dm-text-faint)] dark:hover:bg-white/[0.03]'}`}>
+                      {level === 'All' ? 'Risk' : level}
                     </button>
                   ))}
                 </div>
@@ -195,7 +215,8 @@ const FlaggedEmails: React.FC = () => {
                       </td>
                     </tr>
                   ) : paginatedEmails.map((email, idx) => {
-                    const signals = getVisibleSignals(email, keywords);
+                    const signals = getVisibleSignals(email, keywords, detectionActions);
+                    const linkedIncident = incidentForEmail(incidents, email.id);
                     const riskDot = email.riskLevel === 'Critical' ? 'bg-red-500 animate-pulse' : email.riskLevel === 'High' ? 'bg-orange-500' : email.riskLevel === 'Medium' ? 'bg-amber-500' : 'bg-blue-500';
                     return (
                       <tr key={email.id} onClick={() => setSelectedEmail(email)}
@@ -222,6 +243,11 @@ const FlaggedEmails: React.FC = () => {
                           <span className="text-xs text-slate-600 font-medium truncate block max-w-[175px] group-hover:text-blue-600 transition-colors dark:text-[var(--dm-text-secondary)] dark:group-hover:text-blue-400">
                             {email.subject}
                           </span>
+                          {linkedIncident && (
+                            <span className="mt-1 inline-flex rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300">
+                              Incident · {linkedIncident.status}
+                            </span>
+                          )}
                         </td>
 
                         <td className="px-4 py-3">

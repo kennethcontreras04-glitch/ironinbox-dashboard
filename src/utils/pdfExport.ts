@@ -1,116 +1,121 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FlaggedEmail, Keyword } from '../types';
+import { DetectionActions, FlaggedEmail, Incident, Keyword } from '../types';
+import { computeEmailStats } from './emailStats';
 import { getVisibleSignals } from './keywordSignals';
+import { incidentForEmail } from './incidents';
 
-export const generatePDFReport = (flaggedEmails: FlaggedEmail[], keywords?: Keyword[]) => {
+export const generatePDFReport = (
+  flaggedEmails: FlaggedEmail[],
+  keywords?: Keyword[],
+  extras?: {
+    releasedCount?: number;
+    incidents?: Incident[];
+    detectionActions?: DetectionActions;
+  }
+) => {
   const doc = new jsPDF();
-  
-  // Add header
+  const keywordList = keywords || [];
+  const incidents = extras?.incidents || [];
+  const stats = computeEmailStats({
+    flaggedEmails,
+    releasedCount: extras?.releasedCount || 0,
+    keywords: keywordList,
+    incidents,
+    detectionActions: extras?.detectionActions,
+  });
+
   doc.setFontSize(20);
-  doc.setTextColor(37, 99, 235); // Blue color
+  doc.setTextColor(37, 99, 235);
   doc.text('IronInbox - Phishing Detection Report', 14, 20);
-  
+
   doc.setFontSize(10);
-  doc.setTextColor(100, 116, 139); // Gray color
+  doc.setTextColor(100, 116, 139);
   doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 28);
-  doc.text(`Total Flagged Emails: ${flaggedEmails.length}`, 14, 33);
-  
-  // Add a line
+  doc.text(`Mailbox totals: ${stats.totalProcessed} processed · ${stats.totalFlagged} flagged · ${stats.totalReleased} released`, 14, 33);
+  doc.text(`Incidents: ${stats.totalIncidents} total · ${stats.openIncidents} open · ${stats.incidentsLinkedToEmails} linked to email`, 14, 38);
+
   doc.setDrawColor(226, 232, 240);
-  doc.line(14, 38, 196, 38);
-  
-  // Calculate statistics
-  const stats = {
-    critical: flaggedEmails.filter(e => e.riskLevel === 'Critical').length,
-    high: flaggedEmails.filter(e => e.riskLevel === 'High').length,
-    medium: flaggedEmails.filter(e => e.riskLevel === 'Medium').length,
-    low: flaggedEmails.filter(e => e.riskLevel === 'Low').length,
-  };
-  
-  // Add statistics section
-  let yPos = 48;
+  doc.line(14, 43, 196, 43);
+
+  let yPos = 53;
   doc.setFontSize(14);
-  doc.setTextColor(15, 23, 42); // Dark slate
+  doc.setTextColor(15, 23, 42);
   doc.text('Risk Distribution', 14, yPos);
-  
+
   yPos += 8;
   doc.setFontSize(10);
   doc.setTextColor(71, 85, 105);
-  doc.text(`Critical Risk: ${stats.critical} emails`, 20, yPos);
+  doc.text(`Critical Risk: ${stats.criticalCount} emails`, 20, yPos);
   yPos += 6;
-  doc.text(`High Risk: ${stats.high} emails`, 20, yPos);
+  doc.text(`High Risk: ${stats.highCount} emails`, 20, yPos);
   yPos += 6;
-  doc.text(`Medium Risk: ${stats.medium} emails`, 20, yPos);
+  doc.text(`Medium Risk: ${stats.mediumCount} emails`, 20, yPos);
   yPos += 6;
-  doc.text(`Low Risk: ${stats.low} emails`, 20, yPos);
-  
+  doc.text(`Low Risk: ${stats.lowCount} emails`, 20, yPos);
+
   yPos += 12;
-  
-  // Prepare table data
-  const tableData = flaggedEmails.map(email => {
-    const signals = keywords ? getVisibleSignals(email, keywords) : email.signals;
-    const raw = signals.map(s => `${s.type}: ${s.value}`).join(', ');
-    const sigText = signals.length === 0 ? '—' : (raw.length > 30 ? raw.substring(0, 30) + '...' : raw);
+
+  const tableData = flaggedEmails.map((email) => {
+    const signals = keywords ? getVisibleSignals(email, keywords, extras?.detectionActions) : email.signals;
+    const raw = signals.map((signal) => `${signal.type}: ${signal.value}`).join(', ');
+    const sigText = signals.length === 0 ? '—' : (raw.length > 30 ? `${raw.substring(0, 30)}...` : raw);
+    const incident = incidentForEmail(incidents, email.id);
     return [
       email.received,
-      email.sender.length > 35 ? email.sender.substring(0, 32) + '...' : email.sender,
-      email.subject.length > 40 ? email.subject.substring(0, 37) + '...' : email.subject,
+      email.sender.length > 28 ? `${email.sender.substring(0, 25)}...` : email.sender,
+      email.subject.length > 32 ? `${email.subject.substring(0, 29)}...` : email.subject,
       sigText,
-      email.riskLevel
+      email.riskLevel,
+      incident ? `${incident.id} · ${incident.status}` : '—',
     ];
   });
-  
-  // Add table
+
   autoTable(doc, {
     startY: yPos,
-    head: [['Time', 'Sender', 'Subject', 'Signals', 'Risk']],
+    head: [['Time', 'Sender', 'Subject', 'Signals', 'Risk', 'Incident']],
     body: tableData,
     theme: 'grid',
     headStyles: {
-      fillColor: [37, 99, 235], // Blue
+      fillColor: [37, 99, 235],
       textColor: [255, 255, 255],
       fontStyle: 'bold',
       fontSize: 9
     },
     bodyStyles: {
-      fontSize: 8,
-      cellPadding: 3
+      fontSize: 7,
+      cellPadding: 2
     },
     columnStyles: {
-      0: { cellWidth: 25 },
-      1: { cellWidth: 45 },
-      2: { cellWidth: 50 },
-      3: { cellWidth: 40 },
-      4: { 
-        cellWidth: 20,
-        fontStyle: 'bold'
-      }
+      0: { cellWidth: 24 },
+      1: { cellWidth: 34 },
+      2: { cellWidth: 38 },
+      3: { cellWidth: 32 },
+      4: { cellWidth: 18, fontStyle: 'bold' },
+      5: { cellWidth: 28 },
     },
     didParseCell: (data) => {
-      // Color-code risk levels
       if (data.section === 'body' && data.column.index === 4) {
         const risk = data.cell.raw as string;
         switch (risk) {
           case 'Critical':
-            data.cell.styles.textColor = [220, 38, 38]; // Red
+            data.cell.styles.textColor = [220, 38, 38];
             break;
           case 'High':
-            data.cell.styles.textColor = [234, 88, 12]; // Orange
+            data.cell.styles.textColor = [234, 88, 12];
             break;
           case 'Medium':
-            data.cell.styles.textColor = [202, 138, 4]; // Yellow
+            data.cell.styles.textColor = [202, 138, 4];
             break;
           case 'Low':
-            data.cell.styles.textColor = [37, 99, 235]; // Blue
+            data.cell.styles.textColor = [37, 99, 235];
             break;
         }
       }
     },
     margin: { top: 10, bottom: 20, left: 14, right: 14 }
   });
-  
-  // Add footer
+
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
@@ -128,8 +133,6 @@ export const generatePDFReport = (flaggedEmails: FlaggedEmail[], keywords?: Keyw
       doc.internal.pageSize.height - 10
     );
   }
-  
-  // Save the PDF
-  const filename = `IronInbox_Report_${new Date().toISOString().split('T')[0]}.pdf`;
-  doc.save(filename);
+
+  doc.save(`IronInbox_Report_${new Date().toISOString().split('T')[0]}.pdf`);
 };

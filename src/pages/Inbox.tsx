@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApp } from '../contexts/useApp';
 import Header from '../components/layout/Header';
 import RoleGate, { AccessRestrictedBlock } from '../components/common/RoleGate';
@@ -26,6 +27,7 @@ const ITEMS_PER_PAGE = 10;
 const Inbox: React.FC = () => {
   useEngagementTracker('inbox');
   const { releasedEmails, toggleStarReleasedEmail, toggleReadReleasedEmail, reFlagReleasedEmails } = useApp();
+  const [searchParams] = useSearchParams();
 
   const [searchQuery, setSearchQuery]     = useState('');
   const [timeFilter, setTimeFilter]       = useState<TimeFilterType>('All');
@@ -65,6 +67,13 @@ const Inbox: React.FC = () => {
   const bulkReFlag     = () => { reFlagReleasedEmails(Array.from(selectedIds)); setSelectedEmail(null); clearSelection(); };
 
   React.useEffect(() => { setPage(1); clearSelection(); setSelectedEmail(null); }, [searchQuery, timeFilter, folder]);
+
+  React.useEffect(() => {
+    const emailId = searchParams.get('email');
+    if (!emailId) return;
+    const match = releasedEmails.find((email) => email.id === emailId || email.originalEmail.id === emailId);
+    if (match) setSelectedEmail(match);
+  }, [searchParams, releasedEmails]);
 
   const input = 'w-full px-3 py-2 text-sm rounded-lg border outline-none transition-all bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 dark:bg-[var(--dm-chrome)] dark:border-[var(--dm-border)] dark:text-[var(--dm-text-primary)] dark:focus:border-blue-500/40 dark:focus:ring-blue-500/10';
   const select = `${input} appearance-none cursor-pointer pr-8`;

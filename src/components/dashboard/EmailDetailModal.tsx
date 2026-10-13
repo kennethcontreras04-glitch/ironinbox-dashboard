@@ -39,7 +39,7 @@ function signalWeight(signal: Signal) {
 }
 
 const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) => {
-  const { releaseEmail, keywords, createIncidentFromFlaggedEmail } = useApp();
+  const { releaseEmail, keywords, detectionActions, incidents, createIncidentFromFlaggedEmail } = useApp();
   const { riskFlagThreshold } = useSettings();
   const navigate = useNavigate();
   const [showCreateIncidentPanel, setShowCreateIncidentPanel] = React.useState(false);
@@ -53,7 +53,8 @@ const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) =
 
   if (!email) return null;
 
-  const visibleSignals = getVisibleSignals(email, keywords);
+  const visibleSignals = getVisibleSignals(email, keywords, detectionActions);
+  const existingIncident = incidents.find((incident) => incident.sourceEmailId === email.id);
 
   const handleRelease = () => { releaseEmail(email.id); onClose(); };
 
@@ -69,10 +70,10 @@ const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) =
     const timePart  = parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     const datePart  = parsed.toLocaleDateString([], { month: 'short', day: 'numeric' });
     const friendlyDueDate = sameDay ? `Today, ${timePart}` : isTomorrow ? `Tomorrow, ${timePart}` : `${datePart}, ${timePart}`;
-    createIncidentFromFlaggedEmail(email, { dueDate: friendlyDueDate, assignedTo: assignedTo.trim() || 'SOC Team' });
+    const created = createIncidentFromFlaggedEmail(email, { dueDate: friendlyDueDate, assignedTo: assignedTo.trim() || 'SOC Team' });
     setShowCreateIncidentPanel(false);
     onClose();
-    navigate('/incidents');
+    navigate(`/incidents?incident=${encodeURIComponent(created.id)}`);
   };
 
   const getRiskBadge = (risk: string) => {
@@ -210,12 +211,21 @@ const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) =
             Message ID: {email.id}
           </p>
           <div className="flex gap-2">
-            <button onClick={() => setShowCreateIncidentPanel(prev => !prev)}
-              className="px-4 py-2 text-xs font-semibold rounded-lg border transition-colors
-                         bg-white border-slate-200 text-slate-700 hover:bg-slate-50
-                         dark:bg-[var(--dm-chrome)] dark:border-[var(--dm-border)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-inset-hover)]">
-              {showCreateIncidentPanel ? 'Cancel' : 'Create Incident'}
-            </button>
+            {existingIncident ? (
+              <button onClick={() => { onClose(); navigate(`/incidents?incident=${encodeURIComponent(existingIncident.id)}`); }}
+                className="px-4 py-2 text-xs font-semibold rounded-lg border transition-colors
+                           bg-white border-slate-200 text-slate-700 hover:bg-slate-50
+                           dark:bg-[var(--dm-chrome)] dark:border-[var(--dm-border)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-inset-hover)]">
+                View Incident {existingIncident.id}
+              </button>
+            ) : (
+              <button onClick={() => setShowCreateIncidentPanel(prev => !prev)}
+                className="px-4 py-2 text-xs font-semibold rounded-lg border transition-colors
+                           bg-white border-slate-200 text-slate-700 hover:bg-slate-50
+                           dark:bg-[var(--dm-chrome)] dark:border-[var(--dm-border)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-inset-hover)]">
+                {showCreateIncidentPanel ? 'Cancel' : 'Create Incident'}
+              </button>
+            )}
             <button onClick={onClose}
               className="px-4 py-2 text-xs font-semibold rounded-lg transition-colors
                          text-slate-600 hover:bg-slate-50 dark:text-[var(--dm-text-muted)] dark:hover:bg-white/[0.03] dark:hover:text-[var(--dm-text-primary)]">
@@ -231,7 +241,7 @@ const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) =
         </div>
 
         {/* Create incident panel */}
-        {showCreateIncidentPanel && (
+        {!existingIncident && showCreateIncidentPanel && (
           <div className="rounded-lg border p-4 bg-blue-50/50 border-blue-200 dark:bg-blue-500/[0.05] dark:border-blue-500/20">
             <h4 className="text-xs font-bold text-blue-700 dark:text-blue-300 mb-1">Create Linked Incident</h4>
             <p className="text-xs text-slate-500 mb-4 dark:text-[var(--dm-text-muted)]">
