@@ -30,8 +30,7 @@ export function getVisibleSignals(
 
 export function filterVisibleFlaggedEmails(
   emails: FlaggedEmail[],
-  keywords: Keyword[],
-  _detectionActions?: DetectionActions
+  keywords: Keyword[]
 ): FlaggedEmail[] {
   return emails.filter((email) => {
     if (!email.signals || email.signals.length === 0) return true;

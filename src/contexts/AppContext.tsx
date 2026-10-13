@@ -398,7 +398,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [isWiped, releasedEmails, user, accountIntegrations.length, connectedProviders]);
 
   const displayedSelectedEmail = isWiped ? null : selectedEmail;
-  const displayedIncidents = isWiped ? [] : incidents;
+  const displayedIncidents = useMemo(() => (isWiped ? [] : incidents), [isWiped, incidents]);
 
   const notifications = useMemo(
     () => buildNotifications({

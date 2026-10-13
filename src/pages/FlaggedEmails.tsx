@@ -32,8 +32,8 @@ const FlaggedEmails: React.FC = () => {
   const itemsPerPage = 10;
 
   const visibleFlaggedEmails = useMemo(
-    () => filterVisibleFlaggedEmails(flaggedEmails, keywords, detectionActions),
-    [flaggedEmails, keywords, detectionActions]
+    () => filterVisibleFlaggedEmails(flaggedEmails, keywords),
+    [flaggedEmails, keywords]
   );
 
   React.useEffect(() => {

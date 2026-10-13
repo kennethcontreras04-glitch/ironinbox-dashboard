@@ -80,15 +80,15 @@ const Incidents: React.FC = () => {
     setIsCreating(false);
   };
 
-  const openedQueryRef = useRef<string | null>(null);
-  useEffect(() => {
-    const incidentId = searchParams.get('incident');
-    if (!incidentId || openedQueryRef.current === incidentId) return;
-    const match = incidents.find((item) => item.id === incidentId);
-    if (!match) return;
-    openedQueryRef.current = incidentId;
-    openIncidentModal(match);
-  }, [searchParams, incidents]);
+  const requestedIncidentId = searchParams.get('incident');
+  const [openedQueryId, setOpenedQueryId] = useState<string | null>(null);
+  if (requestedIncidentId && requestedIncidentId !== openedQueryId) {
+    const match = incidents.find((item) => item.id === requestedIncidentId);
+    if (match) {
+      setOpenedQueryId(requestedIncidentId);
+      openIncidentModal(match);
+    }
+  }
 
   const baseIncidents = isWiped ? [] : incidents;
   const allIncidents = baseIncidents.filter((i) => {
