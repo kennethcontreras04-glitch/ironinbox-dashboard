@@ -1,6 +1,7 @@
 import React, { useMemo, useEffect, useState } from 'react';
 import { useApp } from '../contexts/useApp';
-import { filterVisibleFlaggedEmails } from '../utils/keywordSignals';
+import { computeEmailStats } from '../utils/emailStats';
+import { generatePDFReport } from '../utils/pdfExport';
 import { useSettings } from '../contexts/useSettings';
 import { useRole } from '../utils/useRole';
 import Header from '../components/layout/Header';
@@ -20,10 +21,14 @@ import {
   RiInformationLine,
   RiEqualizerLine,
   RiRefreshLine,
+  RiFileDownloadLine,
+  RiFileList3Line,
+  RiLinksLine,
+  RiFlag2Line,
 } from 'react-icons/ri';
 
 const Dashboard: React.FC = () => {
-  const { flaggedEmails, releasedEmails, keywords, syncMailbox, mailboxSyncing, mailboxError, lastSyncedAt } = useApp();
+  const { flaggedEmails, releasedEmails, keywords, incidents, detectionActions, syncMailbox, mailboxSyncing, mailboxError, lastSyncedAt } = useApp();
   const { advanced, alertBehavior } = useSettings();
   const { role } = useRole();
   const [lastRefresh, setLastRefresh] = useState(new Date());
@@ -31,42 +36,13 @@ const Dashboard: React.FC = () => {
   useEngagementTracker('dashboard');
 
   useEffect(() => {
-    if (advanced.autoRefresh) {
-      const interval = setInterval(() => {
-        setLastRefresh(new Date());
-        void syncMailbox();
-      }, advanced.refreshInterval);
-      return () => clearInterval(interval);
-    }
-  }, [advanced.autoRefresh, advanced.refreshInterval, syncMailbox]);
+    if (lastSyncedAt) setLastRefresh(new Date(lastSyncedAt));
+  }, [lastSyncedAt]);
 
-  const stats = useMemo(() => {
-    const visibleFlagged = filterVisibleFlaggedEmails(flaggedEmails, keywords);
-    const totalFlagged = visibleFlagged.length;
-    const totalReleased = releasedEmails.length;
-    const totalProcessed = totalFlagged + totalReleased;
-    
-    const criticalCount = visibleFlagged.filter(e => e.riskLevel === 'Critical').length;
-    const highCount    = visibleFlagged.filter(e => e.riskLevel === 'High').length;
-    const mediumCount  = visibleFlagged.filter(e => e.riskLevel === 'Medium').length;
-    const lowCount     = visibleFlagged.filter(e => e.riskLevel === 'Low').length;
-    
-    const riskWeights = { Critical: 100, High: 70, Medium: 40, Low: 20 };
-    const totalRiskPoints = (criticalCount * riskWeights.Critical) + (highCount * riskWeights.High) + (mediumCount * riskWeights.Medium) + (lowCount * riskWeights.Low);
-    const maxPossibleRisk = totalFlagged * 100;
-    const overallRiskScore = totalFlagged > 0 ? Math.round((totalRiskPoints / maxPossibleRisk) * 100) : 0;
-    const detectionRate = totalProcessed > 0 ? Math.round((totalFlagged / totalProcessed) * 100) : 0;
-    
-    const domainCounts: Record<string, number> = {};
-    visibleFlagged.forEach(email => {
-      const domain = email.sender.split('@')[1] || email.sender;
-      domainCounts[domain] = (domainCounts[domain] || 0) + 1;
-    });
-    const topThreats = Object.entries(domainCounts).sort(([, a], [, b]) => b - a).slice(0, 5);
-    const recentReleased = releasedEmails.slice(0, 5);
-    
-    return { totalFlagged, totalReleased, totalProcessed, criticalCount, highCount, mediumCount, lowCount, overallRiskScore, detectionRate, topThreats, recentReleased, activeKeywords: keywords.filter(k => k.enabled).length };
-  }, [flaggedEmails, releasedEmails, keywords]);
+  const stats = useMemo(
+    () => computeEmailStats({ flaggedEmails, releasedEmails, keywords, incidents, detectionActions }),
+    [flaggedEmails, releasedEmails, keywords, incidents, detectionActions]
+  );
 
   const getRiskInfo = (score: number) => {
     if (score >= 75) return { level: 'Critical', color: 'text-red-500', stroke: '#ef4444', bg: 'bg-red-950/40', border: 'border-red-800/60', badge: 'bg-red-50 text-red-800 border border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-900' };
@@ -84,11 +60,19 @@ const Dashboard: React.FC = () => {
   return (
     <div className="flex-1 overflow-auto bg-slate-50 dark:bg-[var(--dm-bg-page)]">
       <Header title="Dashboard Overview" actionNode={
-        <button onClick={() => void syncMailbox()} disabled={mailboxSyncing}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60">
-          <RiRefreshLine className={`w-3.5 h-3.5 ${mailboxSyncing ? 'animate-spin' : ''}`} />
-          {mailboxSyncing ? 'Syncing…' : 'Sync mailboxes'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => generatePDFReport(flaggedEmails, keywords, { releasedCount: releasedEmails.length, incidents, detectionActions })}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-700">
+            <RiFileDownloadLine className="w-3.5 h-3.5" />
+            Export PDF
+          </button>
+          <button onClick={() => void syncMailbox()} disabled={mailboxSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60">
+            <RiRefreshLine className={`w-3.5 h-3.5 ${mailboxSyncing ? 'animate-spin' : ''}`} />
+            {mailboxSyncing ? 'Syncing…' : 'Sync mailboxes'}
+          </button>
+        </div>
       } />
 
       <div className="p-6 space-y-6 animate-fade-in max-w-7xl mx-auto">
@@ -236,6 +220,12 @@ const Dashboard: React.FC = () => {
           </div>
           <StatCard title="Emails Released"    value={stats.totalReleased}     icon={<RiShieldCheckLine />} iconColor="text-emerald-600" />
           <StatCard title="Active Keywords"    value={stats.activeKeywords}    icon={<RiSpamLine />}        iconColor="text-purple-600"  />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard title="Open Incidents" value={stats.openIncidents} icon={<RiFileList3Line />} iconColor="text-orange-600" />
+          <StatCard title="Incidents Linked to Emails" value={stats.incidentsLinkedToEmails} icon={<RiLinksLine />} iconColor="text-blue-600" />
+          <StatCard title="Flagged Emails Escalated" value={stats.flaggedEmailsEscalated} icon={<RiFlag2Line />} iconColor="text-red-600" />
         </div>
 
         <RoleGate permission="canViewFlaggedEmails">

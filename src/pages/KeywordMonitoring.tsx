@@ -14,8 +14,10 @@ const KeywordMonitoring: React.FC = () => {
   const {
     keywords, addKeyword, deleteKeyword, toggleKeyword, updateKeyword,
     detectionOptions, detectionActions, updateDetectionOptions, updateDetectionActions,
+    saveWorkspace, workspaceSaveStatus,
   } = useApp();
 
+  const [keywordError, setKeywordError]         = useState('');
   const [newKeyword, setNewKeyword]             = useState('');
   const [openMenuId, setOpenMenuId]               = useState<string | null>(null);
   const [menuPos, setMenuPos]                     = useState({ top: 0, left: 0 });
@@ -25,10 +27,25 @@ const KeywordMonitoring: React.FC = () => {
   const menuPanelRef = useRef<HTMLDivElement>(null);
 
   const handleAddKeyword = () => {
-    if (newKeyword.trim()) { addKeyword(newKeyword.trim()); setNewKeyword(''); }
+    const value = newKeyword.trim();
+    if (!value) return;
+    if (!addKeyword(value)) {
+      setKeywordError('That keyword is already on the list.');
+      return;
+    }
+    setKeywordError('');
+    setNewKeyword('');
   };
   const startEditing  = (id: string, val: string) => { setEditingKeywordId(id); setEditValue(val); setOpenMenuId(null); };
-  const commitEdit    = (id: string) => { updateKeyword(id, editValue); setEditingKeywordId(null); setEditValue(''); };
+  const commitEdit    = (id: string) => {
+    if (!updateKeyword(id, editValue)) {
+      setKeywordError('That keyword is already on the list.');
+      return;
+    }
+    setKeywordError('');
+    setEditingKeywordId(null);
+    setEditValue('');
+  };
   const cancelEdit    = () => { setEditingKeywordId(null); setEditValue(''); };
 
   const updateMenuPosition = useCallback(() => {
@@ -96,10 +113,10 @@ const KeywordMonitoring: React.FC = () => {
               <h2 className={`${sectionHead} mb-4`}>Active Keywords</h2>
 
               {/* Add keyword input */}
-              <div className="flex items-center space-x-2 mb-5">
+              <div className="flex items-center space-x-2 mb-2">
                 <input
                   type="text" placeholder="Enter new keyword…" value={newKeyword}
-                  onChange={e => setNewKeyword(e.target.value)}
+                  onChange={e => { setNewKeyword(e.target.value); setKeywordError(''); }}
                   onKeyPress={e => e.key === 'Enter' && handleAddKeyword()}
                   className={input}
                 />
@@ -108,6 +125,7 @@ const KeywordMonitoring: React.FC = () => {
                   <RiAddLine className="w-5 h-5" />
                 </button>
               </div>
+              {keywordError ? <p className="text-xs text-red-600 mb-4">{keywordError}</p> : <div className="mb-3" />}
 
               {/* Keyword tags */}
               <div className="flex flex-wrap gap-2">
@@ -215,8 +233,14 @@ const KeywordMonitoring: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end">
-              <button className="px-5 py-2 text-sm font-semibold rounded-lg transition-colors
+            <div className="flex items-center justify-end gap-3">
+              {workspaceSaveStatus === 'saving' && <span className="text-xs text-slate-400">Saving…</span>}
+              {workspaceSaveStatus === 'saved' && <span className="text-xs text-emerald-600">Saved</span>}
+              {workspaceSaveStatus === 'error' && <span className="text-xs text-red-600">Couldn’t save. Changes are kept in this browser.</span>}
+              <button
+                type="button"
+                onClick={() => void saveWorkspace()}
+                className="px-5 py-2 text-sm font-semibold rounded-lg transition-colors
                                  bg-blue-600 text-white hover:bg-blue-700 shadow-sm
                                  dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500">
                 Save Changes

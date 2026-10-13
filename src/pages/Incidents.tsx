@@ -1,23 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { User, Calendar, AlertTriangle, Clock, CheckCircle, Layers } from 'lucide-react';
 import Header from '../components/layout/Header';
 import { useApp } from '../contexts/useApp';
-
-export interface Incident {
-  id: string;
-  createdTime: string;
-  reporter: string;
-  subject: string;
-  priority: 'Critical' | 'High' | 'Medium' | 'Low';
-  status: 'Open' | 'In Progress' | 'Resolved';
-  dueDate: string;
-  description: string;
-  category?: string;
-  assignedTo?: string;
-  source?: string;
-  sourceEmailId?: string;
-}
+import type { Incident } from '../types';
+import { createIncidentId } from '../utils/incidents';
 
 const INCIDENT_PAGE_SIZE = 5;
 
@@ -37,11 +25,10 @@ const PRIORITIES = ['All', 'Critical', 'High', 'Medium', 'Low'] as const;
 const STATUSES = ['All', 'Open', 'In Progress', 'Resolved'] as const;
 
 const Incidents: React.FC = () => {
-  const { linkedIncidents, isWiped } = useApp();
+  const { incidents, flaggedEmails, releasedEmails, isWiped, upsertIncident, createManualIncident } = useApp();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const filterRef = useRef<HTMLDivElement>(null);
-
-  const [editedIncidents, setIncidents] = useState<Incident[]>([]);
-  const incidents = [...editedIncidents, ...linkedIncidents.filter(item => !editedIncidents.some(edited => edited.id === item.id))];
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -68,7 +55,7 @@ const Incidents: React.FC = () => {
   };
 
   const openCreateIncidentModal = () => {
-    const nextId = `INC-${new Date().getFullYear()}-${String(incidents.length + 1).padStart(3, '0')}`;
+    const nextId = createIncidentId(incidents.map((item) => item.id));
     setIsCreating(true);
     setDraftIncident({ ...EMPTY_INCIDENT, id: nextId, createdTime: 'Just now' });
     setIsModalOpen(true);
@@ -83,17 +70,25 @@ const Incidents: React.FC = () => {
   const handleSaveIncident = () => {
     if (!draftIncident) return;
     if (isCreating) {
-      setIncidents((prev) => [draftIncident, ...prev]);
+      createManualIncident(draftIncident);
       setIncidentPage(1);
     } else {
-      setIncidents((prev) =>
-        [draftIncident, ...prev.filter(inc => inc.id !== draftIncident.id)]
-      );
+      upsertIncident(draftIncident);
     }
     setIsModalOpen(false);
     setDraftIncident(null);
     setIsCreating(false);
   };
+
+  const openedQueryRef = useRef<string | null>(null);
+  useEffect(() => {
+    const incidentId = searchParams.get('incident');
+    if (!incidentId || openedQueryRef.current === incidentId) return;
+    const match = incidents.find((item) => item.id === incidentId);
+    if (!match) return;
+    openedQueryRef.current = incidentId;
+    openIncidentModal(match);
+  }, [searchParams, incidents]);
 
   const baseIncidents = isWiped ? [] : incidents;
   const allIncidents = baseIncidents.filter((i) => {
@@ -552,6 +547,62 @@ const Incidents: React.FC = () => {
                   </div>
                 ))}
               </div>
+
+              {draftIncident.sourceEmail && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Original Email</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-[var(--dm-text-primary)]">{draftIncident.sourceEmail.subject}</p>
+                      <p className="text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">{draftIncident.sourceEmail.sender}</p>
+                      <p className="mt-1 text-[11px] font-mono text-slate-400">
+                        Risk {draftIncident.sourceEmail.riskScore} · {draftIncident.sourceEmail.riskLevel}
+                        {draftIncident.sourceEmail.auth && (
+                          <> · SPF {draftIncident.sourceEmail.auth.spf || 'n/a'} · DKIM {draftIncident.sourceEmail.auth.dkim || 'n/a'} · DMARC {draftIncident.sourceEmail.auth.dmarc || 'n/a'}</>
+                        )}
+                      </p>
+                      {draftIncident.sourceEmail.signals?.length > 0 && (
+                        <p className="mt-2 text-[11px] text-slate-500 dark:text-[var(--dm-text-muted)]">
+                          Signals: {draftIncident.sourceEmail.signals.map((signal) => signal.value).filter(Boolean).join(', ')}
+                        </p>
+                      )}
+                      {(draftIncident.sourceEmail.links?.length || 0) > 0 && (
+                        <p className="mt-1 text-[11px] text-slate-500 dark:text-[var(--dm-text-muted)]">
+                          Links: {draftIncident.sourceEmail.links?.map((link) => link.host || link.href).filter(Boolean).join(', ')}
+                        </p>
+                      )}
+                      {(draftIncident.sourceEmail.attachments?.length || 0) > 0 && (
+                        <p className="mt-1 text-[11px] text-slate-500 dark:text-[var(--dm-text-muted)]">
+                          Attachments: {draftIncident.sourceEmail.attachments?.map((file) => file.filename).filter(Boolean).join(', ')}
+                        </p>
+                      )}
+                      {draftIncident.sourceEmail.snippet && (
+                        <p className="mt-2 text-xs text-slate-600 dark:text-[var(--dm-text-secondary)]">{draftIncident.sourceEmail.snippet}</p>
+                      )}
+                    </div>
+                    {(() => {
+                      const emailId = draftIncident.sourceEmailId || draftIncident.sourceEmail.id;
+                      const stillFlagged = flaggedEmails.some((email) => email.id === emailId);
+                      const released = releasedEmails.some((email) => email.id === emailId || email.originalEmail.id === emailId);
+                      if (!emailId) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeIncidentModal();
+                            navigate(stillFlagged || !released
+                              ? `/flagged-emails?email=${encodeURIComponent(emailId)}`
+                              : `/inbox?email=${encodeURIComponent(emailId)}`);
+                          }}
+                          className="flex-shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+                        >
+                          {released && !stillFlagged ? 'Open in Inbox' : 'Open in Flagged Emails'}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-6 py-3 dark:border-[var(--dm-border)]">

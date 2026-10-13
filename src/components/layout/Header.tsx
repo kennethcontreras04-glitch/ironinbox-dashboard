@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { RiFileDownloadLine } from 'react-icons/ri';
 import { useNavigate } from 'react-router-dom';
 import { useSettings } from '../../contexts/useSettings';
+import NotificationBell from './NotificationBell';
 
 interface HeaderProps {
   title: string;
@@ -29,6 +30,7 @@ export default function Header({ title, showActions = false, onExportPDF, action
             </button>
           )}
           {actionNode}
+          <NotificationBell />
           <button onClick={() => navigate('/account')} aria-label="Open account" className="rounded-full border border-slate-200 overflow-hidden">
             <img src={profile.avatar || '/logo.png'} alt="" className="w-9 h-9 object-cover" />
           </button>

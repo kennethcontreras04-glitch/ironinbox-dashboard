@@ -295,3 +295,38 @@ test('invalid Microsoft tenant configuration does not break existing Gmail login
   assert.equal((await s.request('/api/health')).jsonBody.providers.outlook, false);
   assert.equal((await s.oauth()).result.status, 302);
 });
+
+test('workspace settings and incidents persist per internal user and wipe removes them', async () => {
+  const s = setup(); const { cookie } = await s.oauth();
+  const payload = {
+    keywords: [{ id: '1', value: 'wire-transfer', createdAt: '2026-01-01', enabled: true }],
+    detectionOptions: { caseInsensitive: false, matchInSubject: true, matchInBody: false, wholeWordOnly: true },
+    detectionActions: { flagEmail: false, logMatch: true, showInDashboard: false }, riskThreshold: 40,
+    incidents: [{ id: 'INC-2026-AAA', subject: 'phishing', sourceEmailId: 'a'.repeat(64) + ':' + 'b'.repeat(160) }],
+  };
+  const saved = await s.request('/api/workspace', 'POST', cookie, payload);
+  assert.equal(saved.status, 200); assert.equal(saved.jsonBody.detectionActions.flagEmail, false);
+  assert.equal(saved.jsonBody.incidents[0].sourceEmailId, payload.incidents[0].sourceEmailId);
+  assert.equal((await s.request('/api/workspace', 'POST', cookie, { riskThreshold: 'nope' })).status, 400);
+  await s.request('/api/auth/logout', 'POST', cookie);
+  const again = await s.oauth(); const restored = (await s.request('/api/workspace', 'GET', again.cookie)).jsonBody;
+  assert.equal(restored.saved, true); assert.equal(restored.keywords[0].value, 'wire-transfer');
+  assert.equal(restored.riskThreshold, 40); assert.equal(restored.incidents[0].id, 'INC-2026-AAA');
+  const other = await s.oauth('gmail', 'login', '', 'another');
+  assert.equal((await s.request('/api/workspace', 'GET', other.cookie)).jsonBody.saved, false);
+  assert.equal(JSON.stringify([...s.records]).includes('wire-transfer'), false);
+  await s.request('/api/data/wipe', 'POST', again.cookie);
+  assert.equal((await s.request('/api/workspace', 'GET', (await s.oauth()).cookie)).jsonBody.saved, false);
+});
+
+test('existing Gmail workspace migrates to the internal user with mailbox-scoped incident IDs', async () => {
+  const s = setup();
+  await s.storage.write(`workspaces/${hash('google-user')}`, encrypted({ keywords: [{ id: 'k', value: 'legacy' }], incidents: [{ id: 'incident', sourceEmailId: 'one', sourceEmail: { id: 'one' } }] }));
+  const { cookie } = await s.oauth();
+  const workspace = (await s.request('/api/workspace', 'GET', cookie)).jsonBody;
+  assert.equal(workspace.saved, true); assert.equal(workspace.keywords[0].value, 'legacy');
+  assert.equal(workspace.incidents[0].sourceEmailId, `${hash('gmail:google-user')}:one`);
+  assert.equal(workspace.incidents[0].sourceEmail.id, workspace.incidents[0].sourceEmailId);
+  await s.request('/api/data/wipe', 'POST', cookie);
+  assert.equal(s.records.has(`workspaces/${hash('google-user')}`), false);
+});

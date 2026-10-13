@@ -38,7 +38,7 @@ Existing unexpired Gmail sessions migrate on first use into the persistent user 
 
 Username/password accounts use salted scrypt hashes and a persistent limit of ten attempts per username per fifteen minutes, shared across registration and login. Password recovery, password changes, MFA for password accounts, and login-method linking are not implemented. Do not present these as supported features.
 
-Incident edits, stars/read markers, preferences, and role previews remain browser-side features; role previews are not backend authorization. Mailbox authorization is enforced on the server.
+Detection settings and incident edits persist in the encrypted user workspace. The latest dashboard, notifications, and incident workflows from main are preserved. Stars/read markers and some preferences remain browser-side features; role previews are not backend authorization. Mailbox authorization is enforced on the server.
 
 ## Checks
 
