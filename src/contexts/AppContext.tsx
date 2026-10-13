@@ -259,7 +259,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return set;
   }, [accountIntegrations]);
 
-  const mailboxSnapshot = accountIntegrations.map(item => item.id + ':' + item.monitoring).sort().join(',');
 
   useEffect(() => {
     let cancelled = false;
@@ -367,7 +366,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setReleasedEmails(items => items.filter(item => item.originalEmail.mailboxId && connectedIds.has(item.originalEmail.mailboxId)));
     setSelectedEmail(item => item?.mailboxId && connectedIds.has(item.mailboxId) ? item : null);
     if (readyForResyncRef.current) void syncMailboxRef.current();
-  }, [mailboxSnapshot]);
+  }, [accountIntegrations]);
 
   const displayedFlaggedEmails = useMemo(() => {
     const base = isWiped ? EMPTY_FLAGGED_EMAILS : flaggedEmails;
@@ -387,7 +386,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [isWiped, releasedEmails, user, accountIntegrations, connectedProviders]);
 
   const displayedSelectedEmail = !isWiped && selectedEmail && accountIntegrations.some(account => account.id === selectedEmail.mailboxId && account.monitoring) ? selectedEmail : null;
-  const displayedIncidents = isWiped ? [] : incidents;
+  const displayedIncidents = useMemo(() => isWiped ? [] : incidents, [isWiped, incidents]);
 
   const notifications = useMemo(
     () => buildNotifications({

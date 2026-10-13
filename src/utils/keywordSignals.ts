@@ -31,11 +31,11 @@ export function getVisibleSignals(
 export function filterVisibleFlaggedEmails(
   emails: FlaggedEmail[],
   keywords: Keyword[],
-  _detectionActions?: DetectionActions
+  detectionActions?: DetectionActions
 ): FlaggedEmail[] {
   return emails.filter((email) => {
     if (!email.signals || email.signals.length === 0) return true;
-    return email.signals.some((signal) => signalIsVisible(signal, keywords, undefined, false));
+    return email.signals.some((signal) => signalIsVisible(signal, keywords, detectionActions, false));
   });
 }
 

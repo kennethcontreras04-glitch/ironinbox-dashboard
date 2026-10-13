@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../contexts/useApp';
 import { computeEmailStats } from '../utils/emailStats';
 import { generatePDFReport } from '../utils/pdfExport';
@@ -31,13 +31,10 @@ const Dashboard: React.FC = () => {
   const { flaggedEmails, releasedEmails, keywords, incidents, detectionActions, syncMailbox, mailboxSyncing, mailboxError, lastSyncedAt } = useApp();
   const { advanced, alertBehavior } = useSettings();
   const { role } = useRole();
-  const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [lastRefresh] = useState(() => new Date());
 
   useEngagementTracker('dashboard');
 
-  useEffect(() => {
-    if (lastSyncedAt) setLastRefresh(new Date(lastSyncedAt));
-  }, [lastSyncedAt]);
 
   const stats = useMemo(
     () => computeEmailStats({ flaggedEmails, releasedEmails, keywords, incidents, detectionActions }),

@@ -87,6 +87,7 @@ const Incidents: React.FC = () => {
     const match = incidents.find((item) => item.id === incidentId);
     if (!match) return;
     openedQueryRef.current = incidentId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Synchronize the modal with the external URL selection.
     openIncidentModal(match);
   }, [searchParams, incidents]);
 
