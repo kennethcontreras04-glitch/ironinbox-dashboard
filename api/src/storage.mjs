@@ -1,7 +1,7 @@
 import { BlobServiceClient } from '@azure/storage-blob';
 
-// Each session has its own encrypted record. ETags prevent a stale sync from
-// recreating a mailbox after disconnect or overwriting a concurrent update.
+// Sessions point to persistent encrypted users. ETags prevent sync from
+// undoing a concurrent mailbox disconnect or overwriting a review.
 export function createStorage(connectionString, containerName = 'ironinbox') {
   const container = BlobServiceClient.fromConnectionString(connectionString, {
     retryOptions: { maxTries: 2, tryTimeoutInMs: 5000 },

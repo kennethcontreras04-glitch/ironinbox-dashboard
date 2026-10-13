@@ -14,10 +14,10 @@ const ACCESS_ITEMS = [
 ];
 
 const SECURITY_MEASURES = [
-  'Google OAuth login (no Gmail password is shared with IronInbox)',
-  'Read-only Gmail access',
+  'Google and Microsoft mailbox authorization (no mailbox password is shared)',
+  'Read-only Gmail and Microsoft mail access',
   'Encrypted refresh tokens in the monitoring service',
-  'This browser session’s stored monitoring records can be deleted',
+  'Your saved mailbox connections and monitoring records can be deleted',
 ];
 
 const PrivacyAccessControl: React.FC = () => {
@@ -35,7 +35,7 @@ const PrivacyAccessControl: React.FC = () => {
       setShowWipeModal(false);
     } catch (error) {
       setShowWipeModal(false);
-      setWipeMessage(error instanceof Error ? error.message : 'Unable to delete session data. Please retry.');
+      setWipeMessage(error instanceof Error ? error.message : 'Unable to delete monitoring data. Please retry.');
     } finally {
       setIsWiping(false);
     }
@@ -117,7 +117,7 @@ const PrivacyAccessControl: React.FC = () => {
               </p>
             )}
             <p className="text-xs text-slate-400 dark:text-[var(--dm-text-muted)]">
-              Wipe removes the locally stored monitoring records and Gmail connection for this browser.
+              Wipe removes all saved mailbox connections and monitoring records for your IronInbox user.
             </p>
           </div>
         </div>
@@ -126,8 +126,8 @@ const PrivacyAccessControl: React.FC = () => {
       <Modal isOpen={showWipeModal} onClose={() => setShowWipeModal(false)} title="Wipe All Stored Monitoring Data">
         <div className="space-y-4">
           <p className="text-sm text-slate-600 dark:text-[var(--dm-text-secondary)]">
-            This removes locally stored monitoring records, the encrypted Gmail connection token, and the incidents desk view.
-            To monitor again, connect Gmail and sync the inbox again.
+            This removes locally stored monitoring records, encrypted mailbox connection tokens, and the incidents desk view.
+            To monitor again, sign in and add a Gmail or Microsoft mailbox.
           </p>
           <div className="flex justify-end gap-3">
             <button onClick={() => setShowWipeModal(false)}

@@ -40,6 +40,8 @@ export type SignalDetector =
   | 'llm';
 
 export type FlaggedEmail = {
+  mailboxId?: string;
+  mailboxEmail?: string;
   id: string;
   received: string;
   sender: string;

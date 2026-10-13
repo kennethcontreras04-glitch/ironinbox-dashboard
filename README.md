@@ -1,6 +1,6 @@
 # IronInbox
 
-A React dashboard backed by integrated Azure Functions for Gmail monitoring.
+A React dashboard backed by Azure Functions for read-only Gmail and Microsoft Outlook monitoring.
 
 ## Run locally
 
@@ -11,29 +11,34 @@ npm ci
 npm --prefix api ci
 ```
 
-Copy `.env.example` to `.env` and configure Google OAuth, the encryption key, and a private Blob Storage container. Register `http://localhost:5000/api/gmail/callback` with Google. Start these in separate terminals:
+Copy `.env.example` to `.env`. Configure encryption, a private Blob Storage container, and the email providers you want to use. Register `http://localhost:5000/api/gmail/callback` with Google and `http://localhost:5000/api/outlook/callback` with Microsoft, both as web callbacks. Start these in separate terminals:
 
 ```sh
 npm run api
 npm run dev
 ```
 
-## Deployment
+See [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md) for provider registration and deployment steps. Azure Static Web Apps builds `dist` and deploys `api`. The local `server/index.mjs` is a development adapter for the same handler. Secrets belong in backend settings, never frontend code or GitHub.
 
-Follow [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md). Azure Static Web Apps builds the frontend into `dist` and deploys `api` as managed Functions. The local `server/index.mjs` is only a development adapter for the same API handler.
+## Account flow
 
-Static Web Apps can use the Free plan. Blob Storage is a separate resource with usage-based costs. Secrets belong in backend environment variables, never in frontend code or GitHub.
+- Continue with Google, Continue with Microsoft, or create an account with username/password. Each login identity receives a persistent internal IronInbox user ID.
+- Social login asks only for identity/profile access. The Account page then offers monitoring of that address or a different Gmail/Microsoft mailbox. Username/password users are prompted to add a mailbox.
+- Add multiple mailboxes of either provider. Each connection has its own identity, encrypted tokens, messages, monitoring flag, and sync timestamp.
+- Pause, resume, reconnect, or disconnect one mailbox without changing the app login. Signing out removes only the browser session; connections and reviews persist.
+- Identity records use provider subjects, never email matching. Google login, Microsoft login, and password login create separate IronInbox users unless a future explicit login-linking flow is implemented. Connecting a mailbox does not add it as an alternative app-login method.
 
-## Implemented
+## Monitoring
 
-- Google OAuth sign-in and read-only access to the same Gmail mailbox.
-- Secure browser sessions and encrypted mailbox/token storage.
-- Sync of the latest 50 inbox messages, processed in bounded batches.
-- Rule-based classification using headers, sender domains, links, attachment metadata, and configurable keywords.
-- Server-persisted release/reflag decisions within the mailbox session.
-- Disconnect and deletion of the current session's stored records.
+The latest 50 inbox messages per mailbox are classified using the existing rules for sender domains, content, links, attachment metadata, and configured keywords. Sync runs while the app is open or when manually requested; scheduled background monitoring is not implemented. Gmail uses batches of ten and Microsoft batches of five. Review decisions persist and message IDs include the owning mailbox ID.
 
-Password signup, Microsoft Entra login, Outlook/Slack ingestion, background monitoring, and Gmail message modification are not implemented. Incident edits, stars/read markers, preferences, and role previews are browser-side features; role previews are not backend authorization. Sign-out deletes the current mailbox session. Google consent is revoked separately in Google Account settings.
+Microsoft Graph does not label receiver-trusted authentication verdicts. Outlook authentication results are therefore reported as unknown and do not produce an authenticated-brand trust discount. Attachment metadata is inspected, not attachment contents. Outlook messages with more than four attachment pages fail that sync rather than being silently treated as fully scanned.
+
+Existing unexpired Gmail sessions migrate on first use into the persistent user model, preserving their tokens, messages, and reviews. Expired sessions cannot be recovered automatically. Monitoring wipe removes all connections and monitoring records for the user, across browsers; it retains the IronInbox login account and does not revoke provider consent.
+
+Username/password accounts use salted scrypt hashes and a persistent limit of ten attempts per username per fifteen minutes, shared across registration and login. Password recovery, password changes, MFA for password accounts, and login-method linking are not implemented. Do not present these as supported features.
+
+Incident edits, stars/read markers, preferences, and role previews remain browser-side features; role previews are not backend authorization. Mailbox authorization is enforced on the server.
 
 ## Checks
 
@@ -43,4 +48,4 @@ npm run build
 npm run lint
 ```
 
-API and classifier tests live together in `api/test`. All backend entry points share `api/src/handler.mjs` and `api/src/classify.mjs`.
+Backend tests mock provider responses; live provider consent must be verified separately with test accounts. All entry points share `api/src/handler.mjs`, the provider adapters in `api/src/providers.mjs`, and the existing classifier in `api/src/classify.mjs`.
