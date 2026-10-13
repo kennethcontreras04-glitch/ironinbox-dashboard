@@ -133,13 +133,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
   const hydratingRef = useRef(true);
   const readyForResyncRef = useRef(false);
-  const gradingRef = useRef({ keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents });
+  const gradingRef = useRef({ keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents, accountIntegrations });
   const syncMailboxRef = useRef<() => Promise<void>>(async () => {});
   const persistWorkspaceRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
-    gradingRef.current = { keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents };
-  }, [keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents]);
+    gradingRef.current = { keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents, accountIntegrations };
+  }, [keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents, accountIntegrations]);
 
   const applyMailboxMessages = (messages: Array<FlaggedEmail & { disposition?: EmailDisposition }>) => {
     setFlaggedEmails(messages.filter((message) => message.disposition === 'flagged'));
@@ -178,44 +178,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  const syncInFlight = useRef(false);
+  const syncQueued = useRef(false);
   const syncMailbox = async () => {
-    const {
-      user: currentUser,
-      keywords: currentKeywords,
-      detectionOptions: currentOptions,
-      detectionActions: currentActions,
-      riskFlagThreshold: currentThreshold,
-    } = gradingRef.current;
+    const snapshot = gradingRef.current;
+    const currentUser = snapshot.user;
     if (!currentUser?.uid) return;
+    if (syncInFlight.current) { syncQueued.current = true; return; }
+    syncInFlight.current = true;
     setMailboxSyncing(true);
     setMailboxError(null);
+    const failures: string[] = [];
+    const stillCurrent = () => gradingRef.current.user?.uid === currentUser.uid;
     try {
-      const keywordValues = currentActions.flagEmail
-        ? currentKeywords.filter((keyword) => keyword.enabled).map((keyword) => keyword.value)
-        : [];
-      for (let batch = 0; batch < 5; batch++) {
-        const response = await fetch('/api/gmail/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keywords: keywordValues, options: currentOptions, threshold: currentThreshold }),
-        });
-        const data = await response.json() as {
-          messages?: Array<FlaggedEmail & { disposition: 'flagged' | 'safe' }>;
-          lastSyncedAt?: string;
-          error?: string;
-          hasMore?: boolean;
-        };
-        if (!response.ok) throw new Error(data.error || 'Unable to sync Gmail.');
-        applyMailboxMessages(data.messages || []);
-        setLastSyncedAt(data.lastSyncedAt || new Date().toISOString());
-        if (!data.hasMore) break;
+      for (const mailbox of snapshot.accountIntegrations.filter(item => item.monitoring)) {
+        try {
+          for (let batch = 0; batch < 10; batch++) {
+            if (!stillCurrent()) return;
+            const response = await fetch('/api/mailboxes/sync', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mailboxId: mailbox.id, keywords: snapshot.detectionActions.flagEmail ? snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value) : [], options: snapshot.detectionOptions, threshold: snapshot.riskFlagThreshold }),
+            });
+            const data = await response.json() as { lastSyncedAt?: string; error?: string; hasMore?: boolean };
+            if (!response.ok) throw new Error(data.error || 'Unable to sync this mailbox.');
+            if (!stillCurrent()) return;
+            setLastSyncedAt(data.lastSyncedAt || null);
+            if (!data.hasMore) break;
+          }
+        } catch (error) { failures.push(mailbox.accountEmail + ': ' + (error instanceof Error ? error.message : 'Sync failed.')); }
+      }
+      const response = await fetch('/api/emails');
+      if (!response.ok) throw new Error('Unable to load mailbox messages.');
+      const data = await response.json() as { messages: Array<FlaggedEmail & { disposition: EmailDisposition }> };
+      if (stillCurrent()) {
+        applyMailboxMessages(data.messages);
+        setMailboxError(failures.length ? failures.join(' ') : null);
       }
     } catch (error) {
-      setMailboxError(error instanceof Error ? error.message : 'Unable to sync Gmail.');
+      if (stillCurrent()) setMailboxError(error instanceof Error ? error.message : 'Unable to sync mailboxes.');
     } finally {
+      syncInFlight.current = false;
       setMailboxSyncing(false);
+      if (syncQueued.current) { syncQueued.current = false; void syncMailbox(); }
     }
   };
+
   syncMailboxRef.current = syncMailbox;
 
   const persistWorkspace = async () => {
@@ -247,12 +254,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const connectedProviders = useMemo(() => {
     const set = new Set<EmailSourceProvider>();
     accountIntegrations.forEach((i) => {
-      if (i.connected) set.add(i.provider as EmailSourceProvider);
+      if (i.connected && i.monitoring) set.add(i.provider as EmailSourceProvider);
     });
     return set;
   }, [accountIntegrations]);
 
-  const integrationSnapshot = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,7 +274,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setDetectionActions(DEFAULT_ACTIONS);
       setIsWiped(false);
       setReadNotificationIds(new Set());
-      integrationSnapshot.current = null;
+      setLastSyncedAt(null);
+      setMailboxError(null);
       return;
     }
 
@@ -278,7 +285,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setReleasedEmails([]);
     setSelectedEmail(null);
     setIsWiped(false);
-    integrationSnapshot.current = null;
+
     setReadNotificationIds(loadNotificationReadIds(user.uid));
 
     const local = readLocalWorkspace(user.uid);
@@ -354,39 +361,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [user?.uid, advanced.autoRefresh, advanced.refreshInterval]);
 
   useEffect(() => {
-    if (!user || accountIntegrations.length === 0) return;
-    const connected = new Set(
-      accountIntegrations.filter((i) => i.connected).map((i) => i.provider as EmailSourceProvider)
-    );
-    const key = [...connected].sort().join(',');
-    if (integrationSnapshot.current === null) {
-      integrationSnapshot.current = key;
-      return;
-    }
-    if (integrationSnapshot.current === key) return;
-    const prevProviders = integrationSnapshot.current
-      .split(',')
-      .filter(Boolean) as EmailSourceProvider[];
-    const disconnected = prevProviders.filter((p) => !connected.has(p));
-    integrationSnapshot.current = key;
-    if (disconnected.length === 0) return;
-
-    setFlaggedEmails((prevEmails) => prevEmails.filter((e) => !disconnected.includes(e.sourceProvider)));
-    setReleasedEmails((prevR) =>
-      prevR.filter((r) => !disconnected.includes(r.originalEmail.sourceProvider))
-    );
-    setSelectedEmail((sel) =>
-      sel && disconnected.includes(sel.sourceProvider) ? null : sel
-    );
-  }, [user, accountIntegrations]);
+    const connectedIds = new Set(accountIntegrations.map(account => account.id));
+    setFlaggedEmails(items => items.filter(item => item.mailboxId && connectedIds.has(item.mailboxId)));
+    setReleasedEmails(items => items.filter(item => item.originalEmail.mailboxId && connectedIds.has(item.originalEmail.mailboxId)));
+    setSelectedEmail(item => item?.mailboxId && connectedIds.has(item.mailboxId) ? item : null);
+    if (readyForResyncRef.current) void syncMailboxRef.current();
+  }, [accountIntegrations]);
 
   const displayedFlaggedEmails = useMemo(() => {
     const base = isWiped ? EMPTY_FLAGGED_EMAILS : flaggedEmails;
     if (!user) return base;
     if (accountIntegrations.length === 0) return [];
     if (connectedProviders.size === 0) return [];
-    return base.filter((e) => connectedProviders.has(e.sourceProvider));
-  }, [isWiped, flaggedEmails, user, accountIntegrations.length, connectedProviders]);
+    return base.filter((e) => connectedProviders.has(e.sourceProvider) && accountIntegrations.some(account => account.id === e.mailboxId && account.monitoring));
+  }, [isWiped, flaggedEmails, user, accountIntegrations, connectedProviders]);
 
   const displayedKeywords = isWiped ? EMPTY_KEYWORDS : keywords;
   const displayedReleasedEmails = useMemo(() => {
@@ -394,11 +382,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!user) return base;
     if (accountIntegrations.length === 0) return [];
     if (connectedProviders.size === 0) return [];
-    return base.filter((r) => connectedProviders.has(r.originalEmail.sourceProvider));
-  }, [isWiped, releasedEmails, user, accountIntegrations.length, connectedProviders]);
+    return base.filter((r) => connectedProviders.has(r.originalEmail.sourceProvider) && accountIntegrations.some(account => account.id === r.originalEmail.mailboxId && account.monitoring));
+  }, [isWiped, releasedEmails, user, accountIntegrations, connectedProviders]);
 
-  const displayedSelectedEmail = isWiped ? null : selectedEmail;
-  const displayedIncidents = useMemo(() => (isWiped ? [] : incidents), [isWiped, incidents]);
+  const displayedSelectedEmail = !isWiped && selectedEmail && accountIntegrations.some(account => account.id === selectedEmail.mailboxId && account.monitoring) ? selectedEmail : null;
+  const displayedIncidents = useMemo(() => isWiped ? [] : incidents, [isWiped, incidents]);
 
   const notifications = useMemo(
     () => buildNotifications({

@@ -381,7 +381,7 @@ export function toClientEmail(email, grade, disposition, review = null) {
     signals: grade.signals,
     riskScore: grade.riskScore,
     riskLevel: grade.riskLevel,
-    sourceProvider: 'gmail',
+    sourceProvider: email.sourceProvider || 'gmail',
     disposition,
     review: review || undefined,
   };
@@ -391,4 +391,27 @@ export function presentStoredEmail(record, { keywords = [], options = {}, thresh
   const grade = gradeEmail(record.email, { keywords, options });
   const disposition = record.review?.disposition ?? (grade.riskScore >= threshold ? 'flagged' : 'safe');
   return toClientEmail(record.email, grade, disposition, record.review);
+}
+
+// Microsoft Graph message -> the same representation consumed by gradeEmail.
+export function normalizeOutlookMessage(message) {
+  const address = item => {
+    const email = (item?.emailAddress?.address || '').toLowerCase();
+    return { name: item?.emailAddress?.name || '', email, domain: email.split('@')[1] || '' };
+  };
+  const html = message.body?.contentType?.toLowerCase() === 'html' ? message.body.content || '' : '';
+  const text = (html ? htmlToText(html) : message.body?.content || '').slice(0, 60_000);
+  return {
+    schemaVersion: SCHEMA_VERSION, sourceProvider: 'outlook', id: message.id,
+    threadId: message.conversationId || message.id, labelIds: ['INBOX'],
+    receivedAt: new Date(message.receivedDateTime).toISOString(),
+    from: address(message.from), replyTo: message.replyTo?.length ? address(message.replyTo[0]) : null,
+    to: (message.toRecipients || []).map(item => item.emailAddress?.address).filter(Boolean).join(', '),
+    subject: message.subject || '(no subject)', snippet: message.bodyPreview || '', text,
+    links: extractLinks(html, text),
+    attachments: (message.attachments || []).map(item => ({ filename: item.name || '', mimeType: item.contentType || '', size: item.size || 0 })),
+    // Graph exposes raw headers but doesn't mark a trustworthy receiver verdict.
+    // Do not grant a trusted-sender discount from sender-supplied authentication headers.
+    auth: { spf: 'none', dkim: 'none', dmarc: 'none' },
+  };
 }

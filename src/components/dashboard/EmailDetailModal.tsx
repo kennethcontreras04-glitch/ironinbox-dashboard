@@ -98,6 +98,7 @@ const EmailDetailModal: React.FC<EmailDetailModalProps> = ({ email, onClose }) =
   return (
     <Modal isOpen={!!email} onClose={onClose} title="Email Analysis Report">
       <div className="space-y-6 animate-fade-in">
+        {email.mailboxEmail && <p className="text-xs text-slate-500">Monitored account: {email.mailboxEmail}</p>}
 
         {/* Email header */}
         <div className="rounded-lg border p-4 bg-slate-50/80 border-slate-200 dark:bg-[var(--dm-bg-elevated)] dark:border-[var(--dm-border)]">

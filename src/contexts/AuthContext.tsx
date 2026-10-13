@@ -2,47 +2,72 @@ import { AuthContext } from './useAuth';
 import React, { useEffect, useState, type ReactNode } from 'react';
 import { useSettings } from './useSettings';
 
-export type IntegrationProvider = 'gmail';
-export interface AccountIntegration { provider: IntegrationProvider; connected: boolean; accountEmail: string | null; }
-interface GmailUser { uid: string; email: string; displayName: string; photoURL: string; }
-export interface AuthContextType {
-  user: GmailUser | null; monitoredEmail: string | null; loading: boolean;
-  accountIntegrations: AccountIntegration[]; beginGmailSignIn: () => void; signOut: () => Promise<void>;
-  disconnectIntegration: (provider: IntegrationProvider) => void;
+export type IntegrationProvider = 'gmail' | 'outlook';
+export interface AccountIntegration {
+  id: string; provider: IntegrationProvider; connected: boolean; accountEmail: string;
+  monitoring: boolean; lastSyncedAt: string | null;
 }
-
+interface AppUser { uid: string; email: string; displayName: string; photoURL: string; loginProvider: IntegrationProvider | 'password'; }
+interface Status extends AppUser { mailboxes: AccountIntegration[]; }
+export interface AuthContextType {
+  user: AppUser | null; monitoredEmail: string | null; loading: boolean;
+  accountIntegrations: AccountIntegration[]; beginGmailSignIn: () => void; beginMicrosoftSignIn: () => void;
+  addMailbox: (provider: IntegrationProvider, same?: boolean, mailboxId?: string) => void;
+  passwordSignIn: (username: string, password: string, register: boolean) => Promise<void>;
+  signOut: () => Promise<void>; refreshAccounts: () => Promise<void>;
+  disconnectIntegration: (id: string) => Promise<void>;
+  setMonitoring: (id: string, monitoring: boolean) => Promise<void>;
+}
+async function mutate(path: string, body: object = {}) {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json() as { error?: string };
+  if (!response.ok) throw new Error(data.error || 'Unable to complete the request. Please retry.');
+}
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<GmailUser | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [accountIntegrations, setAccounts] = useState<AccountIntegration[]>([]);
   const [loading, setLoading] = useState(true);
   const { updateProfile } = useSettings();
+  const refreshAccounts = async () => {
+    const response = await fetch('/api/auth/status');
+    if (response.status === 401) { setUser(null); setAccounts([]); return; }
+    const data = await response.json() as Status & { error?: string };
+    if (!response.ok) throw new Error(data.error || 'Unable to load your accounts.');
+    setUser(previous => previous?.uid === data.uid ? previous : { uid: data.uid, email: data.email,
+      displayName: data.displayName, photoURL: '', loginProvider: data.loginProvider });
+    setAccounts(data.mailboxes);
+  };
   useEffect(() => {
     let active = true;
-    // Discard the legacy browser-only identity. The server session is authoritative.
-    try {
-      localStorage.removeItem('ironinbox_gmail_user');
-      sessionStorage.removeItem('ironinbox_pending_gmail_owner');
-    } catch { /* Server sessions do not require browser storage. */ }
-    void fetch('/api/gmail/status').then(async response => {
+    void fetch('/api/auth/status').then(async response => {
       if (!response.ok) return;
-      const account = await response.json() as { connected: boolean; uid: string; email: string };
-      if (active && account.connected) setUser({ uid: account.uid, email: account.email, displayName: account.email.split('@')[0], photoURL: '' });
-    }).catch(() => { /* Sign-in remains available when the API is unavailable. */ })
+      const data = await response.json() as Status;
+      if (active) {
+        setUser({ uid: data.uid, email: data.email, displayName: data.displayName, photoURL: '', loginProvider: data.loginProvider });
+        setAccounts(data.mailboxes);
+      }
+    }).catch(() => { /* Login remains available when the API is unavailable. */ })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []);
   useEffect(() => {
     if (user) updateProfile({ name: user.displayName, email: user.email, avatar: user.photoURL, role: 'User' });
   }, [user, updateProfile]);
-  const endSession = async (path: string) => {
-    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    if (!response.ok && response.status !== 401) throw new Error('Unable to disconnect. Please try again.');
-    setUser(null);
+  const signOut = async () => {
+    await mutate('/api/auth/logout');
+    setUser(null); setAccounts([]);
   };
-  const signOut = () => endSession('/api/auth/logout');
-  const accountIntegrations: AccountIntegration[] = user ? [{ provider: 'gmail', connected: true, accountEmail: user.email }] : [];
+  const passwordSignIn = async (username: string, password: string, register: boolean) => {
+    await mutate(register ? '/api/auth/register' : '/api/auth/password', { username, password });
+    await refreshAccounts();
+  };
+  const disconnectIntegration = async (mailboxId: string) => { await mutate('/api/mailboxes/disconnect', { mailboxId }); await refreshAccounts(); };
+  const setMonitoring = async (mailboxId: string, monitoring: boolean) => { await mutate('/api/mailboxes/monitoring', { mailboxId, monitoring }); await refreshAccounts(); };
   return <AuthContext.Provider value={{
-    user, monitoredEmail: user?.email ?? null, loading, accountIntegrations,
-    beginGmailSignIn: () => window.location.assign('/api/gmail/connect'), signOut,
-    disconnectIntegration: provider => { if (provider === 'gmail') void endSession('/api/gmail/disconnect').catch(error => window.alert(error.message)); },
+    user, monitoredEmail: accountIntegrations.find(item => item.monitoring)?.accountEmail ?? null, loading, accountIntegrations,
+    beginGmailSignIn: () => window.location.assign('/api/auth/gmail/start'),
+    beginMicrosoftSignIn: () => window.location.assign('/api/auth/outlook/start'),
+    addMailbox: (provider, same = false, mailboxId) => window.location.assign(`/api/${provider}/connect?${new URLSearchParams({ ...(same ? { same: '1' } : {}), ...(mailboxId ? { mailboxId } : {}) })}`),
+    passwordSignIn, signOut, refreshAccounts, disconnectIntegration, setMonitoring,
   }}>{children}</AuthContext.Provider>;
 };

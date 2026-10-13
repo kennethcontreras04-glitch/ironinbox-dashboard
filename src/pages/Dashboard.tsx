@@ -66,7 +66,7 @@ const Dashboard: React.FC = () => {
           <button onClick={() => void syncMailbox()} disabled={mailboxSyncing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60">
             <RiRefreshLine className={`w-3.5 h-3.5 ${mailboxSyncing ? 'animate-spin' : ''}`} />
-            {mailboxSyncing ? 'Syncing…' : 'Sync Gmail'}
+            {mailboxSyncing ? 'Syncing…' : 'Sync mailboxes'}
           </button>
         </div>
       } />
@@ -89,7 +89,7 @@ const Dashboard: React.FC = () => {
 
         {mailboxError && (
           <div role="alert" className="px-4 py-3 rounded-lg border text-xs bg-red-50 border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-300">
-            Gmail sync failed: {mailboxError}
+            Mailbox sync failed: {mailboxError}
           </div>
         )}
 
