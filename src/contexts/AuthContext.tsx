@@ -10,8 +10,8 @@ export interface AccountIntegration {
   id: string;
   provider: IntegrationProvider;
   connected: boolean;
-  accountEmail: string | null;
   monitoring: boolean;
+  accountEmail: string | null;
 }
 
 export interface IronInboxUser {
@@ -93,35 +93,34 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   }, []);
 
   // Check whether Gmail is connected
-  useEffect(() => {
-    if (!user) {
-      setMonitoredEmail(null);
-      return;
-    }
+ useEffect(() => {
+  if (!user) return;
 
-    let active = true;
+  let active = true;
 
-    void fetch('/api/gmail/status')
-      .then(async response => {
-        if (!response.ok) return;
+  void fetch('/api/gmail/status')
+    .then(async response => {
+      if (!response.ok) return;
 
-        const account = (await response.json()) as {
-          connected: boolean;
-          email: string;
-        };
+      const account = (await response.json()) as {
+        connected: boolean;
+        email: string;
+      };
 
-        if (active && account.connected) {
-          setMonitoredEmail(account.email);
-        }
-      })
-      .catch(() => {
-        // IronInbox authentication still works if Gmail/API is unavailable.
-      });
+      if (active) {
+        setMonitoredEmail(
+          account.connected ? account.email : null
+        );
+      }
+    })
+    .catch(() => {
+      // Authentication works even if Gmail is unavailable.
+    });
 
-    return () => {
-      active = false;
-    };
-  }, [user]);
+  return () => {
+    active = false;
+  };
+}, [user]);
 
   // Update the existing IronInbox profile context - temporarily removed during authentication migration
   // useEffect(() => {
@@ -171,13 +170,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   );
 };
 
-const disconnectIntegration = (_provider: IntegrationProvider) => {
+const disconnectIntegration = (provider: IntegrationProvider) => {
+  if (provider !== 'gmail') return;
+
   window.alert(
-    'Gmail integration will be available after the authentication migration.'
+    'Gmail disconnection will be available after API integration.'
   );
 };
 
-  const accountIntegrations: AccountIntegration[] = [];
+  //const accountIntegrations: AccountIntegration[] = [];
+
+  const accountIntegrations: AccountIntegration[] =
+  user && monitoredEmail
+    ? [
+        {
+          id: monitoredEmail,
+          provider: 'gmail',
+          connected: true,
+          monitoring: true,
+          accountEmail: monitoredEmail,
+        },
+      ]
+    : [];
 
   return (
     <AuthContext.Provider
