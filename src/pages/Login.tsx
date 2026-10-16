@@ -1,116 +1,315 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/useAuth';
-import { RiGoogleFill, RiMicrosoftFill } from 'react-icons/ri';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { beginGmailSignIn, beginMicrosoftSignIn, passwordSignIn, user } = useAuth();
-  const [error, setError] = useState(() => new URLSearchParams(window.location.search).get('auth') === 'error' ? 'Sign-in failed or expired. Please try again.' : '');
-  const [busy, setBusy] = useState(false);
-  const [register, setRegister] = useState(false);
-  const [username, setUsername] = useState('');
+  const { signIn, signUp, user } = useAuth();
+
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [providers, setProviders] = useState({ gmail: false, outlook: false });
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
-    void fetch('/api/health').then(response => response.json()).then(data => setProviders(data.providers || { gmail: false, outlook: false })).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (user) navigate('/account', { replace: true });
+    if (user) {
+      navigate('/dashboard', { replace: true });
+    }
   }, [user, navigate]);
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault(); setBusy(true); setError('');
-    try { await passwordSignIn(username, password, register); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed.'); }
-    finally { setBusy(false); setPassword(''); }
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    setError('');
+    setMessage('');
+
+    if (!email || !password) {
+      setError('Please enter your email and password.');
+      return;
+    }
+
+    if (mode === 'signup' && password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      if (mode === 'signup') {
+        await signUp(email, password);
+
+        setMessage(
+          'Account created. Check your email to confirm your account before signing in.'
+        );
+      } else {
+        await signIn(email, password);
+        navigate('/dashboard', { replace: true });
+      }
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Authentication failed. Please try again.'
+      );
+    } finally {
+      setLoading(false);
+    }
   };
-  const button = 'w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border border-slate-200 text-sm font-medium disabled:opacity-50 dark:border-[var(--dm-border)]';
-  const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 bg-transparent dark:border-[var(--dm-border)]';
+
+  const switchMode = () => {
+    setMode(current => (current === 'signin' ? 'signup' : 'signin'));
+    setError('');
+    setMessage('');
+    setPassword('');
+    setConfirmPassword('');
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center p-6
-                    bg-slate-100 dark:bg-[var(--dm-bg-page)]">
+    <div
+      className="min-h-screen flex items-center justify-center p-6
+                 bg-slate-100 dark:bg-[var(--dm-bg-page)]"
+    >
+      {/* Dark mode grid background */}
+      <div
+        className="fixed inset-0 pointer-events-none hidden dark:block"
+        style={{
+          backgroundImage:
+            'linear-gradient(rgba(100,116,139,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(100,116,139,0.07) 1px, transparent 1px)',
+          backgroundSize: '40px 40px',
+        }}
+      />
 
-      {/* Dark mode: grid background */}
-      <div className="fixed inset-0 pointer-events-none hidden dark:block"
-           style={{
-             backgroundImage: 'linear-gradient(rgba(100,116,139,0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(100,116,139,0.07) 1px, transparent 1px)',
-             backgroundSize: '40px 40px',
-           }} />
-      <div className="fixed inset-0 pointer-events-none hidden dark:block
-                      bg-gradient-to-b from-blue-500/8 via-transparent to-blue-500/5" />
+      <div
+        className="fixed inset-0 pointer-events-none hidden dark:block
+                   bg-gradient-to-b from-blue-500/8 via-transparent to-blue-500/5"
+      />
 
-      {/* Card */}
       <div className="relative w-full max-w-md animate-fade-in">
+        <div
+          className="absolute -inset-px rounded-2xl hidden dark:block
+                     bg-gradient-to-b from-blue-500/18 to-transparent blur-sm"
+        />
 
-        {/* Glow (dark mode only) */}
-        <div className="absolute -inset-px rounded-2xl hidden dark:block
-                        bg-gradient-to-b from-blue-500/18 to-transparent blur-sm" />
-
-        <div className="relative rounded-xl border p-8
-                        bg-white border-slate-200 shadow-xl
-                        dark:bg-[var(--dm-surface-popover)] dark:border-[var(--dm-border)] dark:shadow-[0_24px_48px_rgba(0,0,0,0.6)]">
-
-          {/* Top accent line */}
-          <div className="absolute top-0 left-8 right-8 h-px hidden dark:block
-                          bg-gradient-to-r from-transparent via-blue-500/35 to-transparent" />
+        <div
+          className="relative rounded-xl border p-8
+                     bg-white border-slate-200 shadow-xl
+                     dark:bg-[var(--dm-surface-popover)]
+                     dark:border-[var(--dm-border)]
+                     dark:shadow-[0_24px_48px_rgba(0,0,0,0.6)]"
+        >
+          <div
+            className="absolute top-0 left-8 right-8 h-px hidden dark:block
+                       bg-gradient-to-r from-transparent via-blue-500/35 to-transparent"
+          />
 
           {/* Brand */}
           <div className="flex flex-col items-center mb-8">
             <div className="w-24 h-24 flex items-center justify-center mb-2">
-              <img src="/logo.png" alt="IronInbox" className="w-24 h-24 object-contain" />
+              <img
+                src="/logo.png"
+                alt="IronInbox"
+                className="w-24 h-24 object-contain"
+              />
             </div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight dark:text-[var(--dm-text-primary)]">
+
+            <h1
+              className="text-xl font-bold text-slate-900 tracking-tight
+                         dark:text-[var(--dm-text-primary)]"
+            >
               IronInbox
             </h1>
-            <p className="text-[9px] font-mono font-bold uppercase tracking-[0.25em] text-slate-400 mt-1
-                          dark:text-blue-400/50">
+
+            <p
+              className="text-[9px] font-mono font-bold uppercase
+                         tracking-[0.25em] text-slate-400 mt-1
+                         dark:text-blue-400/50"
+            >
               Security Operations Platform
             </p>
           </div>
 
           {/* Heading */}
           <div className="text-center mb-6">
-            <h2 className="text-sm font-semibold text-slate-800 dark:text-[var(--dm-text-secondary)]">
-              Sign in to IronInbox
+            <h2
+              className="text-sm font-semibold text-slate-800
+                         dark:text-[var(--dm-text-secondary)]"
+            >
+              {mode === 'signin'
+                ? 'Sign in to your account'
+                : 'Create your account'}
             </h2>
-            <p className="text-xs text-slate-400 mt-1.5 dark:text-[var(--dm-text-muted)]">
-              Sign in, then choose which email accounts to monitor.
+
+            <p
+              className="text-xs text-slate-400 mt-1.5
+                         dark:text-[var(--dm-text-muted)]"
+            >
+              {mode === 'signin'
+                ? 'Access the IronInbox security dashboard.'
+                : 'Create an IronInbox account to get started.'}
             </p>
           </div>
 
-          {/* Google SSO */}
-          <button
-            type="button"
-            onClick={beginGmailSignIn}
-            disabled={busy || !providers.gmail}
-            className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-lg border text-sm font-medium transition-all disabled:opacity-50
-                       bg-white border-slate-200 text-slate-700 hover:bg-slate-50
-                       dark:bg-[var(--dm-chrome)] dark:border-[var(--dm-border)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-inset-hover)] dark:hover:text-[var(--dm-text-primary)] dark:hover:border-blue-500/30"
-          >
-            <RiGoogleFill className="w-4 h-4 text-red-500" />
-            Continue with Google
-          </button>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Email */}
+            <div>
+              <label
+                htmlFor="email"
+                className="block text-xs font-medium text-slate-600 mb-1.5
+                           dark:text-[var(--dm-text-secondary)]"
+              >
+                Email
+              </label>
 
-          <button className={button + ' mt-3'} disabled={busy || !providers.outlook} onClick={beginMicrosoftSignIn}><RiMicrosoftFill /> Continue with Microsoft</button>
-          {!providers.outlook && <p className="text-xs text-slate-500 mt-2">Microsoft connection requires administrator setup.</p>}
-          <form onSubmit={submit} className="space-y-3 border-t border-slate-200 mt-5 pt-4 dark:border-[var(--dm-border)] dark:text-[var(--dm-text-primary)]">
-            <h2 className="text-sm font-semibold">{register ? 'Create an account' : 'Sign in with username and password'}</h2>
-            <label className="block text-sm">Username<input className={input} autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required minLength={3} maxLength={64} pattern="[a-zA-Z0-9._\-]+" /></label>
-            <label className="block text-sm">Password<input className={input} type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={event => setPassword(event.target.value)} required minLength={12} maxLength={128} /></label>
-            {register && <p className="text-xs text-slate-500">Use at least 12 characters. Keep your password safe; password recovery is not available yet.</p>}
-            <button className={button + ' bg-blue-600 text-white'} disabled={busy}>{busy ? 'Please wait…' : register ? 'Create account' : 'Sign in'}</button>
-          </form>
-          <button className="text-sm text-blue-600 my-4" onClick={() => { setRegister(!register); setError(''); }}>{register ? 'Already have an account? Sign in' : 'Create an account with username and password'}</button>
-
-          {/* Error */}
-          {error && (
-            <div className="mb-4 px-3 py-2.5 rounded-lg text-xs
-                            bg-red-50 border border-red-200 text-red-600
-                            dark:bg-red-950/30 dark:border-red-900/50 dark:text-red-400">
-              {error}
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={event => setEmail(event.target.value)}
+                placeholder="name@example.com"
+                disabled={loading}
+                className="w-full rounded-lg border px-3 py-2.5 text-sm
+                           bg-white border-slate-200 text-slate-900
+                           focus:outline-none focus:ring-2 focus:ring-blue-500/30
+                           focus:border-blue-500
+                           disabled:opacity-50
+                           dark:bg-[var(--dm-chrome)]
+                           dark:border-[var(--dm-border)]
+                           dark:text-[var(--dm-text-primary)]"
+              />
             </div>
-          )}
 
+            {/* Password */}
+            <div>
+              <label
+                htmlFor="password"
+                className="block text-xs font-medium text-slate-600 mb-1.5
+                           dark:text-[var(--dm-text-secondary)]"
+              >
+                Password
+              </label>
+
+              <input
+                id="password"
+                type="password"
+                autoComplete={
+                  mode === 'signin' ? 'current-password' : 'new-password'
+                }
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                placeholder="Enter your password"
+                disabled={loading}
+                className="w-full rounded-lg border px-3 py-2.5 text-sm
+                           bg-white border-slate-200 text-slate-900
+                           focus:outline-none focus:ring-2 focus:ring-blue-500/30
+                           focus:border-blue-500
+                           disabled:opacity-50
+                           dark:bg-[var(--dm-chrome)]
+                           dark:border-[var(--dm-border)]
+                           dark:text-[var(--dm-text-primary)]"
+              />
+            </div>
+
+            {/* Confirm password - signup only */}
+            {mode === 'signup' && (
+              <div>
+                <label
+                  htmlFor="confirmPassword"
+                  className="block text-xs font-medium text-slate-600 mb-1.5
+                             dark:text-[var(--dm-text-secondary)]"
+                >
+                  Confirm Password
+                </label>
+
+                <input
+                  id="confirmPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={event =>
+                    setConfirmPassword(event.target.value)
+                  }
+                  placeholder="Confirm your password"
+                  disabled={loading}
+                  className="w-full rounded-lg border px-3 py-2.5 text-sm
+                             bg-white border-slate-200 text-slate-900
+                             focus:outline-none focus:ring-2
+                             focus:ring-blue-500/30 focus:border-blue-500
+                             disabled:opacity-50
+                             dark:bg-[var(--dm-chrome)]
+                             dark:border-[var(--dm-border)]
+                             dark:text-[var(--dm-text-primary)]"
+                />
+              </div>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div
+                className="px-3 py-2.5 rounded-lg text-xs
+                           bg-red-50 border border-red-200 text-red-600
+                           dark:bg-red-950/30 dark:border-red-900/50
+                           dark:text-red-400"
+              >
+                {error}
+              </div>
+            )}
+
+            {/* Success */}
+            {message && (
+              <div
+                className="px-3 py-2.5 rounded-lg text-xs
+                           bg-green-50 border border-green-200 text-green-700
+                           dark:bg-green-950/30 dark:border-green-900/50
+                           dark:text-green-400"
+              >
+                {message}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold
+                         bg-blue-600 text-white hover:bg-blue-700
+                         transition-all disabled:opacity-50
+                         disabled:cursor-not-allowed"
+            >
+              {loading
+                ? 'Please wait...'
+                : mode === 'signin'
+                  ? 'Sign In'
+                  : 'Create Account'}
+            </button>
+          </form>
+
+          {/* Switch sign-in / signup */}
+          <div className="text-center mt-5">
+            <span
+              className="text-xs text-slate-400
+                         dark:text-[var(--dm-text-muted)]"
+            >
+              {mode === 'signin'
+                ? "Don't have an account? "
+                : 'Already have an account? '}
+            </span>
+
+            <button
+              type="button"
+              onClick={switchMode}
+              disabled={loading}
+              className="text-xs font-medium text-blue-600 hover:text-blue-700
+                         dark:text-blue-400 dark:hover:text-blue-300"
+            >
+              {mode === 'signin' ? 'Create Account' : 'Sign In'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
