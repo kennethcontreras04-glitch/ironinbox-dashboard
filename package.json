@@ -12,6 +12,8 @@
     "test:api": "npm --prefix api test"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "clsx": "^2.1.1",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
