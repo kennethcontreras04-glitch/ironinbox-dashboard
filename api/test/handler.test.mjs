@@ -48,8 +48,8 @@ function setup(overrides = {}) {
     if (url.includes('graph.microsoft.com')) return ok({ id: 'one', conversationId: 'thread', receivedDateTime: '2026-10-12T10:00:00Z',
       from: { emailAddress: { name: 'PayPal Support', address: 'help@paypa1.com' } }, subject: 'Urgent verify your account',
       body: { contentType: 'html', content: '<a href="https://evil.example/login">paypal.com</a>' }, hasAttachments: true });
-    if (url.includes('messages?')) return ok({ messages: [{ id: 'one' }] });
-    return ok({ id: 'one', internalDate: '1700000000000', payload: { headers: [{ name: 'Subject', value: 'Urgent password verify' }], body: { data: '' } } });
+    if (url.includes('messages?')) return ok({ messages: [{ id: behavior.messageId || 'one' }] });
+    return ok({ internalDate: '1700000000000', ...(behavior.gmailPayload || { payload: { headers: [{ name: 'Subject', value: 'Urgent password verify' }], body: { data: '' } } }), id: behavior.messageId || 'one' });
   };
   const settings = { ...env, ...overrides };
   const handler = createHandler({ env: settings, storage, fetcher });
@@ -329,4 +329,173 @@ test('existing Gmail workspace migrates to the internal user with mailbox-scoped
   assert.equal(workspace.incidents[0].sourceEmail.id, workspace.incidents[0].sourceEmailId);
   await s.request('/api/data/wipe', 'POST', cookie);
   assert.equal(s.records.has(`workspaces/${hash('google-user')}`), false);
+});
+
+function gmailPayload({ from, subject, text, auth = 'mx.google.com; dkim=pass; spf=pass; dmarc=pass' }) {
+  return {
+    threadId: 'thread', labelIds: ['INBOX'], snippet: text.slice(0, 80), internalDate: '1767225600000',
+    payload: {
+      mimeType: 'text/plain',
+      headers: [
+        { name: 'From', value: from },
+        { name: 'Subject', value: subject },
+        { name: 'Authentication-Results', value: auth },
+      ],
+      body: { data: Buffer.from(text, 'utf8').toString('base64url') },
+    },
+  };
+}
+
+test('controlled email keeps its analysis from flagging through incident and report fields', async () => {
+  const s = setup();
+  const { cookie } = await s.oauth();
+  const mailbox = await s.connect(cookie);
+  const keywords = ['verify', 'urgent', 'suspended', 'confirm', 'account', 'security'];
+  s.behavior.gmailPayload = gmailPayload({
+    from: 'IT Help <it@project.test>',
+    subject: 'Account security reminder',
+    text: 'Your account security settings are unchanged. Please confirm this notice. It expires next year.',
+  });
+  const benign = await s.sync(cookie, mailbox.id, { keywords, threshold: 50 });
+  assert.equal(benign.status, 200);
+  assert.equal(benign.jsonBody.messages[0].riskLevel, 'Low');
+  assert.equal(benign.jsonBody.messages[0].disposition, 'safe');
+
+  s.behavior.messageId = 'phish';
+  s.behavior.gmailPayload = gmailPayload({
+    from: '"PayPal Security" <help@paypa1.com>',
+    subject: 'Urgent: verify your account',
+    text: 'Your account will be suspended. Verify your account immediately.',
+    auth: 'mx.google.com; dkim=fail; spf=fail; dmarc=fail',
+  });
+  const suspicious = await s.sync(cookie, mailbox.id, { keywords, threshold: 50 });
+  const email = suspicious.jsonBody.messages[0];
+  assert.equal(email.disposition, 'flagged');
+  assert.notEqual(email.riskLevel, 'Low');
+  assert.ok(email.signals.some((signal) => signal.detector === 'lookalike-domain'));
+  assert.ok(email.content.includes('suspended'));
+
+  const incident = {
+    id: 'INC-2026-FLOW01',
+    createdTime: 'Just now',
+    reporter: 'google-user@example.com',
+    subject: `Email Threat Investigation: ${email.subject}`,
+    priority: email.riskLevel,
+    status: 'Open',
+    dueDate: 'Tomorrow, 5:00 PM',
+    description: `Linked from ${email.sender}`,
+    category: 'Email Security',
+    assignedTo: 'SOC Team',
+    source: 'Flagged Email',
+    sourceEmailId: email.id,
+    sourceEmail: email,
+  };
+  const saved = await s.request('/api/workspace', 'POST', cookie, {
+    keywords: keywords.map((value, index) => ({ id: String(index), value, createdAt: '2026-10-16', enabled: true })),
+    incidents: [incident],
+    riskThreshold: 50,
+  });
+  assert.equal(saved.status, 200);
+  const restored = (await s.request('/api/workspace', 'GET', cookie)).jsonBody.incidents[0];
+  assert.equal(restored.sourceEmailId, email.id);
+  assert.equal(restored.priority, email.riskLevel);
+  assert.equal(restored.sourceEmail.subject, email.subject);
+  assert.equal(restored.sourceEmail.sender, email.sender);
+  assert.equal(restored.sourceEmail.senderEmail, email.senderEmail);
+  assert.equal(restored.sourceEmail.riskScore, email.riskScore);
+  assert.equal(restored.sourceEmail.riskLevel, email.riskLevel);
+  assert.equal(restored.sourceEmail.content, email.content);
+  assert.ok(restored.sourceEmail.signals.some((signal) => signal.detector === 'lookalike-domain' && signal.weight > 0));
+  const flagged = suspicious.jsonBody.messages.filter((message) => message.disposition === 'flagged');
+  assert.equal(flagged.length, 1);
+  assert.equal(restored.sourceEmailId, flagged[0].id);
+});
+
+test('sync keeps only bounded keywords and known detection options', async () => {
+  const s = setup();
+  const { cookie } = await s.oauth();
+  const mailbox = await s.connect(cookie);
+  s.behavior.gmailPayload = gmailPayload({
+    from: 'IT Help <it@project.test>',
+    subject: 'Account security reminder',
+    text: 'Your account security settings are unchanged. Please confirm this notice.',
+  });
+  const synced = await s.sync(cookie, mailbox.id, {
+    keywords: ['  account  ', 'security', 'x'.repeat(500)],
+    options: { matchInSubject: true, matchInBody: true, wholeWordOnly: false, caseInsensitive: true, injected: true },
+    threshold: 50,
+  });
+  assert.equal(synced.status, 200);
+  assert.equal(synced.jsonBody.messages[0].riskLevel, 'Low');
+  assert.equal(synced.jsonBody.messages[0].disposition, 'safe');
+  const owner = [...s.records.entries()].find(([key]) => key.startsWith('users/'))[1];
+  const settings = decrypted(owner).settings;
+  assert.deepEqual(settings.keywords, ['account', 'security', 'x'.repeat(200)]);
+  assert.equal(Object.hasOwn(settings.options, 'injected'), false);
+  assert.deepEqual(settings.options, {
+    caseInsensitive: true, matchInSubject: true, matchInBody: true, wholeWordOnly: false,
+  });
+});
+
+test('stored role masks email fields and blocks restricted actions', async () => {
+  const s = setup();
+  const { cookie } = await s.oauth();
+  const mailbox = await s.connect(cookie);
+  s.behavior.gmailPayload = gmailPayload({
+    from: '"PayPal Security" <help@paypa1.com>',
+    subject: 'Urgent: verify your account',
+    text: 'Your account will be suspended. Verify your account immediately at https://paypa1.com/login',
+    auth: 'mx.google.com; dkim=fail; spf=fail; dmarc=fail',
+  });
+  const synced = await s.sync(cookie, mailbox.id, { keywords: ['verify', 'urgent', 'account'], threshold: 50 });
+  const original = synced.jsonBody.messages[0];
+  assert.equal(original.masked, undefined);
+  assert.match(original.content, /suspended/);
+  const incident = {
+    id: 'INC-2026-MASK01', subject: `Email Threat Investigation: ${original.subject}`, priority: original.riskLevel,
+    status: 'Open', source: 'Flagged Email', sourceEmailId: original.id, sourceEmail: original, description: original.content,
+  };
+  assert.equal((await s.request('/api/workspace', 'POST', cookie, { incidents: [incident] })).status, 200);
+
+  assert.equal((await s.request('/api/auth/role', 'POST', cookie, { role: 'viewer' })).jsonBody.role, 'viewer');
+  assert.equal((await s.status(cookie)).role, 'viewer');
+  const masked = await s.request('/api/emails?role=admin', 'GET', cookie);
+  const hidden = masked.jsonBody.messages[0];
+  assert.equal(masked.jsonBody.role, 'viewer');
+  assert.equal(hidden.masked, true);
+  assert.equal(hidden.subject, 'Restricted subject');
+  assert.equal(hidden.content, '');
+  assert.equal(hidden.sender, 'Restricted sender');
+  assert.equal(hidden.riskScore, original.riskScore);
+  assert.equal(hidden.riskLevel, original.riskLevel);
+  assert.equal(hidden.disposition, original.disposition);
+  const serialized = JSON.stringify(masked.jsonBody);
+  assert.equal(serialized.includes('paypa1'), false);
+  assert.equal(serialized.includes('verify your account'), false);
+  assert.equal(serialized.includes('suspended'), false);
+  const hiddenIncident = (await s.request('/api/workspace', 'GET', cookie)).jsonBody.incidents[0];
+  assert.equal(hiddenIncident.sourceEmailId, original.id);
+  assert.equal(hiddenIncident.sourceEmail.subject, 'Restricted subject');
+  assert.equal(hiddenIncident.sourceEmail.content, '');
+  assert.equal(JSON.stringify(hiddenIncident).includes('paypa1'), false);
+  assert.equal((await s.request('/api/emails/disposition', 'POST', cookie, { ids: [original.id], disposition: 'safe' })).status, 403);
+  assert.equal((await s.request('/api/workspace', 'POST', cookie, { incidents: [] })).status, 403);
+  assert.equal((await s.request('/api/data/wipe', 'POST', cookie, {})).status, 403);
+  assert.equal((await s.request('/api/mailboxes/disconnect', 'POST', cookie, { mailboxId: mailbox.id })).status, 403);
+  assert.match((await s.request('/api/gmail/connect', 'GET', cookie)).headers.Location, /connection=forbidden/);
+
+  assert.equal((await s.request('/api/auth/role', 'POST', cookie, { role: 'manager' })).jsonBody.role, 'manager');
+  const managerView = (await s.request('/api/emails', 'GET', cookie)).jsonBody.messages[0];
+  assert.equal(managerView.subject, original.subject);
+  assert.match(managerView.content, /suspended/);
+  assert.equal((await s.request('/api/emails/disposition', 'POST', cookie, { ids: [original.id], disposition: 'safe' })).status, 200);
+  assert.equal((await s.request('/api/data/wipe', 'POST', cookie, {})).status, 403);
+
+  assert.equal((await s.request('/api/auth/role', 'POST', cookie, { role: 'admin' })).jsonBody.role, 'admin');
+  const restored = (await s.request('/api/emails', 'GET', cookie)).jsonBody.messages[0];
+  assert.equal(restored.subject, original.subject);
+  assert.equal(restored.disposition, 'safe');
+  const restoredIncident = (await s.request('/api/workspace', 'GET', cookie)).jsonBody.incidents[0];
+  assert.equal(restoredIncident.sourceEmail.subject, original.subject);
+  assert.match(restoredIncident.sourceEmail.content, /suspended/);
 });

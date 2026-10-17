@@ -24,6 +24,7 @@ const DETECTOR_LABELS: Record<string, string> = {
   'link-ip': 'IP Address Link',
   attachment: 'Risky Attachment',
   'provider-spam': 'Provider Spam',
+  'trusted-sender': 'Authenticated Sender',
   llm: 'Model Review',
 };
 

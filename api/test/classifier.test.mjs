@@ -190,6 +190,86 @@ test('flags .svg and .one attachments', () => {
   }
 });
 
+test('common keywords alone do not raise a normal email to Medium', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'IT Help <it@project.test>',
+    subject: 'Account security reminder',
+    text: 'Your account security settings are unchanged. Please confirm this notice for your records. It expires next year. No action is required.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email, { keywords: ['account', 'security', 'confirm', 'expires', 'password', 'update'] });
+  assert.equal(grade.riskLevel, 'Low');
+  assert.ok(grade.riskScore < 30, `score ${grade.riskScore} reached Medium`);
+  assert.ok(grade.signals.some((signal) => signal.value === 'account' && signal.weight === 5));
+  assert.ok(grade.signals.some((signal) => signal.value === 'security'));
+  assert.equal(grade.riskScore, Math.max(0, sumOfWeights(grade)));
+});
+
+test('common keywords do not match inside longer words', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'Finance <finance@project.test>',
+    subject: 'Quarterly accountancy notes',
+    text: 'The accountancy review is attached. Cybersecurity training is optional.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email, { keywords: ['account', 'security'] });
+  assert.equal(grade.signals.length, 0);
+  assert.equal(grade.riskLevel, 'Low');
+});
+
+test('a wire-transfer request with a different reply-to is flagged', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'CFO Desk <boss@wire-desk.example>',
+    replyTo: 'collect@evil.example',
+    subject: 'Urgent wire transfer',
+    text: 'Need the wire transfer sent immediately. Buy gift cards if the bank asks questions. This is urgent.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email, { keywords: ['urgent', 'account', 'security'] });
+  assert.ok(grade.signals.some((signal) => signal.detector === 'reply-to'));
+  assert.ok(grade.signals.some((signal) => signal.detector === 'phrase'));
+  assert.ok(grade.riskScore >= 50, `score ${grade.riskScore} stayed under the flag line`);
+  assert.notEqual(grade.riskLevel, 'Low');
+});
+
+test('a reply-to mismatch by itself stays Low', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'IT Help <it@project.test>',
+    replyTo: 'notices@updates.test',
+    subject: 'Thursday notes',
+    text: 'The notes are in the shared folder.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email);
+  assert.equal(grade.riskScore, 15);
+  assert.equal(grade.riskLevel, 'Low');
+});
+
+test('padded common keywords are still treated as common words', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'IT Help <it@project.test>',
+    subject: 'Account security reminder',
+    text: 'Your account security settings are unchanged.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email, { keywords: ['  account  ', 'security', 'x'.repeat(400)] });
+  assert.equal(grade.riskLevel, 'Low');
+  assert.ok(grade.signals.some((signal) => signal.value === 'account' && signal.weight === 5));
+  assert.ok(grade.signals.every((signal) => String(signal.value).length <= 200));
+});
+
+test('common keywords still add weight when a stronger signal is present', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: '"PayPal Security" <help@paypa1.com>',
+    subject: 'Account security',
+    text: 'Review your account security notice.',
+    auth: PASS,
+  }));
+  const grade = gradeEmail(email, { keywords: ['account', 'security'] });
+  assert.ok(grade.signals.some((signal) => signal.detector === 'lookalike-domain'));
+  assert.ok(grade.riskScore >= 30);
+});
+
 test("prefers Google's Authentication-Results over a forged one", () => {
   const email = normalizeGmailMessage(gmailMessage({
     from: 'a@paypa1.com', subject: 'x', text: 'x', auth: FAIL,
