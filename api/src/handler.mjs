@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt as sc
 import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
-import { permissionsFor, presentIncidentForRole, presentMessageForRole, roleOf } from './access.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -18,33 +17,8 @@ const clientMessages = user => Object.values(user.mailboxes).filter(mailbox => m
     ...presentStoredEmail(record, user.settings), id: `${mailbox.id}:${record.email.id}`,
     mailboxId: mailbox.id, mailboxEmail: mailbox.email, sourceProvider: mailbox.provider,
   }))).sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
-const visibleMessages = user => clientMessages(user).map(message => presentMessageForRole(message, roleOf(user)));
-const visibleWorkspace = user => user.workspace ? {
-  saved: true,
-  ...user.workspace,
-  incidents: (user.workspace.incidents || []).map(incident => presentIncidentForRole(incident, roleOf(user))),
-} : { saved: false };
 const workspaceKey = uid => `workspaces/${hash(uid)}`;
 const clip = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
-function detectionKeywords(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item) => typeof item === 'string')
-    .map((item) => item.trim().slice(0, 200))
-    .filter(Boolean)
-    .slice(0, 200);
-}
-
-function detectionOptions(value) {
-  const options = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return {
-    caseInsensitive: options.caseInsensitive !== false,
-    matchInSubject: options.matchInSubject !== false,
-    matchInBody: options.matchInBody !== false,
-    wholeWordOnly: options.wholeWordOnly === true,
-  };
-}
-
 function sanitizeKeyword(item) {
   if (!item || typeof item !== 'object') return null;
   const value = clip(item.value, 200).trim();
@@ -73,7 +47,6 @@ function sanitizeIncidentEmail(email) {
       value: clip(signal?.value, 200),
       description: clip(signal?.description, 400),
       detector: clip(signal?.detector, 40),
-      weight: Number.isFinite(Number(signal?.weight)) ? Math.max(-100, Math.min(100, Number(signal.weight))) : undefined,
     })) : [],
     auth: email.auth && typeof email.auth === 'object' ? {
       spf: clip(email.auth.spf, 40), dkim: clip(email.auth.dkim, 40), dmarc: clip(email.auth.dmarc, 40),
@@ -168,7 +141,7 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   const write = (key, value, etag) => storage.write(key, { encrypted: encrypt(value) }, etag);
   const redirect = (location, cookies = []) => ({ status: 302, headers: { Location: location, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }, cookies });
   const newUser = (uid, profile, provider) => ({ uid, email: profile.email, displayName: profile.name || profile.email,
-    loginProvider: provider, loginSubject: profile.subject, role: 'admin', mailboxes: {}, createdAt: new Date().toISOString() });
+    loginProvider: provider, loginSubject: profile.subject, mailboxes: {}, createdAt: new Date().toISOString() });
   async function identityUser(provider, profile, create = true) {
     const identityKey = `identities/${hash(`${provider}:${profile.subject}`)}`;
     let identity = await read(identityKey);
@@ -286,7 +259,6 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         const intent = path.includes('/auth/') ? 'login' : 'connect';
         const active = await sessionUser(cookies);
         if (intent === 'connect' && !active) throw fail(401, 'Sign in before adding an email account.');
-        if (intent === 'connect' && !permissionsFor(roleOf(active.user.value)).manageMailboxes) return redirect(`${frontend}/account?connection=forbidden`);
         const state = random();
         const browser = random();
         const verifier = random();
@@ -335,24 +307,13 @@ export function createHandler({ env, storage, fetcher = fetch }) {
       const user = record.value;
       if (request.method === 'GET' && ['/api/auth/status', '/api/gmail/status'].includes(path)) return json(200, {
         connected: true, uid: user.uid, email: user.email, displayName: user.displayName, loginProvider: user.loginProvider,
-        role: roleOf(user),
         mailboxes: Object.values(user.mailboxes).map(publicMailbox),
       });
-      if (request.method === 'POST' && path === '/api/auth/role') {
-        const body = await readJson(request);
-        if (!['admin', 'manager', 'viewer'].includes(body.role)) throw fail(400, 'role must be admin, manager, or viewer.');
-        // This prototype has one account. The role is stored on that account and
-        // every later request uses the stored role, never a role sent with the email request.
-        user.role = body.role;
-        await write(userKey, user, record.etag);
-        return json(200, { role: user.role });
-      }
       if (request.method === 'POST' && path === '/api/auth/logout') {
         await storage.remove(sessionKey, session.etag);
         return json(200, { signedOut: true }, [cookie('ironinbox_session', '', 0)]);
       }
       if (request.method === 'POST' && path === '/api/data/wipe') {
-        if (!permissionsFor(roleOf(user)).wipeData) throw fail(403, 'Your role cannot wipe monitoring data.');
         user.mailboxes = {};
         delete user.settings;
         delete user.workspace;
@@ -364,15 +325,13 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         await write(userKey, user, record.etag);
         return json(200, { wiped: true });
       }
-      if (request.method === 'GET' && path === '/api/workspace') return json(200, visibleWorkspace(user));
+      if (request.method === 'GET' && path === '/api/workspace') return json(200, user.workspace ? { saved: true, ...user.workspace } : { saved: false });
       if (request.method === 'POST' && path === '/api/workspace') {
-        if (!permissionsFor(roleOf(user)).manageWorkspace) throw fail(403, 'Your role cannot change keywords, detection settings, or incidents.');
         user.workspace = parseWorkspace(await readJson(request));
         await write(userKey, user, record.etag);
         return json(200, { saved: true, ...user.workspace });
       }
       if (request.method === 'POST' && ['/api/mailboxes/disconnect', '/api/mailboxes/monitoring', '/api/gmail/disconnect'].includes(path)) {
-        if (!permissionsFor(roleOf(user)).manageMailboxes) throw fail(403, 'Your role cannot change mailbox connections.');
         const body = await readJson(request);
         const mailbox = ownedMailbox(user, body.mailboxId);
         if (!mailbox) throw fail(404, 'Mailbox not found.');
@@ -390,13 +349,11 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         if (!mailbox.monitoring) throw fail(409, 'Monitoring is paused for this mailbox.');
         const provider = providers[mailbox.provider];
         if (!provider?.configured) throw fail(503, 'This email provider is not configured.');
-        if (permissionsFor(roleOf(user)).manageWorkspace) {
-          user.settings = {
-            keywords: detectionKeywords(body.keywords),
-            options: detectionOptions(body.options),
-            threshold: Number.isFinite(Number(body.threshold)) ? Math.max(0, Math.min(100, Number(body.threshold))) : 50,
-          };
-        }
+        user.settings = {
+          keywords: Array.isArray(body.keywords) ? body.keywords.filter(x => typeof x === 'string').slice(0, 200) : [],
+          options: body.options && typeof body.options === 'object' ? body.options : {},
+          threshold: Number.isFinite(Number(body.threshold)) ? Math.max(0, Math.min(100, Number(body.threshold))) : 50,
+        };
         if (mailbox.tokenExpiresAt < Date.now() + 30_000) {
           if (!mailbox.refreshToken) throw fail(401, 'Reconnect this mailbox to renew access.');
           const token = await provider.refresh(mailbox.refreshToken);
@@ -409,10 +366,9 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         mailbox.messages = Object.fromEntries(synced.ids.filter(id => mailbox.messages[id]).map(id => [id, mailbox.messages[id]]));
         mailbox.lastSyncedAt = new Date().toISOString();
         await write(userKey, user, record.etag);
-        return json(200, { added: synced.emails.length, messages: visibleMessages(user), lastSyncedAt: mailbox.lastSyncedAt, hasMore: synced.hasMore });
+        return json(200, { added: synced.emails.length, messages: clientMessages(user), lastSyncedAt: mailbox.lastSyncedAt, hasMore: synced.hasMore });
       }
       if (request.method === 'POST' && path === '/api/emails/disposition') {
-        if (!permissionsFor(roleOf(user)).reviewEmails) throw fail(403, 'Your role cannot review or release emails.');
         const body = await readJson(request);
         if (!Array.isArray(body.ids) || body.ids.some(id => typeof id !== 'string') || !['flagged', 'safe'].includes(body.disposition)) throw fail(400, 'ids[] and disposition (flagged|safe) are required.');
         let updated = 0;
@@ -427,7 +383,7 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         await write(userKey, user, record.etag);
         return json(200, { updated });
       }
-      if (request.method === 'GET' && path === '/api/emails') return json(200, { messages: visibleMessages(user), role: roleOf(user) });
+      if (request.method === 'GET' && path === '/api/emails') return json(200, { messages: clientMessages(user) });
       return json(404, { error: 'Not found.' });
     } catch (error) {
       const status = error.status || ([412, 404].includes(error.statusCode) ? 409 : 500);
