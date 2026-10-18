@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
 import { permissionsFor, presentIncidentForRole, presentMessageForRole, roleOf } from './access.mjs';
+import { createSupabaseAuth } from './supabaseAuth.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -146,6 +147,40 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   const key = env.TOKEN_ENCRYPTION_KEY ? createHash('sha256').update(env.TOKEN_ENCRYPTION_KEY).digest() : null;
   const ready = Boolean(frontend && key && storage);
   const providers = createProviders(env, fetcher);
+  const verifySupabaseUser = createSupabaseAuth(env);
+
+async function authenticatedUser(request) {
+  const identity = await verifySupabaseUser(request);
+  const userKey = `users/${identity.uid}`;
+
+  let record = await read(userKey);
+
+  if (!record) {
+    const user = {
+      uid: identity.uid,
+      email: identity.email,
+      displayName: identity.email.split('@')[0] || 'User',
+      loginProvider: 'supabase',
+      role: 'admin',
+      mailboxes: {},
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await write(userKey, user);
+    } catch (error) {
+      if (error.statusCode !== 412 && error.statusCode !== 409) {
+        throw error;
+      }
+    }
+
+    record = await read(userKey);
+  }
+
+  if (!record) throw fail(500, 'Unable to load account.');
+
+  return { user: record, userKey };
+}
   const secure = !frontend?.startsWith('http://localhost:');
   const cookie = (name, value, maxAge) => ({ name, value, maxAge, path: '/', httpOnly: true, secure, sameSite: 'Lax' });
   const cookiesOf = request => Object.fromEntries((request.headers.get('cookie') || '').split(';').map(x => x.trim().split('=')));
@@ -279,28 +314,55 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         }
         return json(200, { signedIn: true }, [await createSession(credential.value.uid)]);
       }
-      const start = path.match(/^\/api\/(gmail|outlook)\/connect$/) || path.match(/^\/api\/auth\/(gmail|outlook)\/start$/);
-      if (request.method === 'GET' && start) {
-        const provider = start[1];
-        if (!providers[provider].configured) throw fail(503, `${provider === 'gmail' ? 'Google' : 'Microsoft'} is not configured yet.`);
-        const intent = path.includes('/auth/') ? 'login' : 'connect';
-        const active = await sessionUser(cookies);
-        if (intent === 'connect' && !active) throw fail(401, 'Sign in before adding an email account.');
-        if (intent === 'connect' && !permissionsFor(roleOf(active.user.value)).manageMailboxes) return redirect(`${frontend}/account?connection=forbidden`);
-        const state = random();
-        const browser = random();
-        const verifier = random();
-        const reconnectId = url.searchParams.get('mailboxId');
-        const reconnect = reconnectId ? active ? ownedMailbox(active.user.value, reconnectId) : null : null;
-        if (reconnectId && (!reconnect || reconnect.provider !== provider)) throw fail(404, 'Mailbox not found.');
-        const same = intent === 'connect' && url.searchParams.get('same') === '1' && active.user.value.loginProvider === provider;
-        await write(`oauth/${hash(state)}`, { provider, intent, browser: hash(browser), verifier,
-          expectedSubject: reconnect?.subject || (same ? active.user.value.loginSubject : null),
-          session: intent === 'connect' ? hash(cookies.ironinbox_session) : null,
-          uid: intent === 'connect' ? active.user.value.uid : null, expiresAt: Date.now() + 600_000 });
-        const hint = reconnect?.email || (same ? active.user.value.email : undefined);
-        return redirect(providers[provider].authorize(state, verifier, intent, hint), [cookie('ironinbox_oauth', browser, 600)]);
-      }
+      const start = path.match(/^\/api\/(gmail|outlook)\/connect$/);
+const gmailStart = path === '/api/gmail/connect/start';
+
+if (
+  (request.method === 'GET' && start) ||
+  (request.method === 'POST' && gmailStart)
+) {
+  const provider = gmailStart ? 'gmail' : start[1];
+
+  if (!providers[provider].configured) {
+    throw fail(503, `${provider} is not configured yet.`);
+  }
+
+  // Keep the existing Outlook flow unchanged for now.
+  if (!gmailStart) {
+    throw fail(501, 'Legacy connection flow is temporarily unavailable.');
+  }
+
+  const active = await authenticatedUser(request);
+
+  if (!permissionsFor(roleOf(active.user.value)).manageMailboxes) {
+    throw fail(403, 'Your role cannot connect mailboxes.');
+  }
+
+  const state = random();
+  const browser = random();
+  const verifier = random();
+
+  await write(`oauth/${hash(state)}`, {
+    provider: 'gmail',
+    intent: 'connect',
+    browser: hash(browser),
+    verifier,
+    uid: active.user.value.uid,
+    expiresAt: Date.now() + 600_000,
+  });
+
+  const authorizationUrl = providers.gmail.authorize(
+    state,
+    verifier,
+    'connect'
+  );
+
+  return json(
+    200,
+    { authorizationUrl },
+    [cookie('ironinbox_oauth', browser, 600)]
+  );
+}
       const callback = path.match(/^\/api\/(gmail|outlook)\/callback$/);
       if (request.method === 'GET' && callback) {
         const provider = callback[1];
@@ -313,9 +375,37 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         if (url.searchParams.has('error') || !url.searchParams.get('code')) throw fail(400, 'Permission was not granted.');
         let active;
         if (callbackIntent === 'connect') {
-          active = await sessionUser(cookies);
-          if (!active || state.value.session !== hash(cookies.ironinbox_session || '') || state.value.uid !== active.user.value.uid) throw fail(401, 'The signed-in account changed. Please add the mailbox again.');
-        }
+  if (provider === 'gmail') {
+    const uid = state.value.uid;
+
+    if (typeof uid !== 'string' || !uid) {
+      throw fail(401, 'Invalid mailbox connection.');
+    }
+
+    const userKey = `users/${uid}`;
+    const record = await read(userKey);
+
+    if (!record) {
+      throw fail(401, 'The IronInbox account no longer exists.');
+    }
+
+    active = {
+      user: record,
+      userKey,
+    };
+  } else {
+    // Preserve legacy Outlook callback behavior until migration.
+    active = await sessionUser(cookies);
+
+    if (
+      !active ||
+      state.value.session !== hash(cookies.ironinbox_session || '') ||
+      state.value.uid !== active.user.value.uid
+    ) {
+      throw fail(401, 'The signed-in account changed.');
+    }
+  }
+}
         const token = await providers[provider].redeem(url.searchParams.get('code'), state.value.verifier);
         const profile = await providers[provider].profile(token.access_token);
         if (callbackIntent === 'connect') {
@@ -329,15 +419,27 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         const user = await identityUser(provider, profile);
         return redirect(`${frontend}/login`, [await createSession(user.value.uid), cookie('ironinbox_oauth', '', 0)]);
       }
-      const active = await sessionUser(cookies);
-      if (!active) throw fail(401, 'Please sign in.');
-      const { user: record, userKey, session, sessionKey } = active;
-      const user = record.value;
-      if (request.method === 'GET' && ['/api/auth/status', '/api/gmail/status'].includes(path)) return json(200, {
-        connected: true, uid: user.uid, email: user.email, displayName: user.displayName, loginProvider: user.loginProvider,
-        role: roleOf(user),
-        mailboxes: Object.values(user.mailboxes).map(publicMailbox),
-      });
+      const active = await authenticatedUser(request);
+
+const { user: record, userKey } = active;
+
+const user = record.value;
+      if (
+  request.method === 'GET' &&
+  ['/api/auth/status', '/api/gmail/status'].includes(path)
+) {
+  const mailboxes = Object.values(user.mailboxes).map(publicMailbox);
+  const gmail = mailboxes.find(mailbox => mailbox.provider === 'gmail');
+
+  return json(200, {
+    connected: Boolean(gmail),
+    email: gmail?.accountEmail ?? null,
+    uid: user.uid,
+    displayName: user.displayName,
+    role: roleOf(user),
+    mailboxes,
+  });
+}
       if (request.method === 'POST' && path === '/api/auth/role') {
         const body = await readJson(request);
         if (!['admin', 'manager', 'viewer'].includes(body.role)) throw fail(400, 'role must be admin, manager, or viewer.');
@@ -347,10 +449,7 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         await write(userKey, user, record.etag);
         return json(200, { role: user.role });
       }
-      if (request.method === 'POST' && path === '/api/auth/logout') {
-        await storage.remove(sessionKey, session.etag);
-        return json(200, { signedOut: true }, [cookie('ironinbox_session', '', 0)]);
-      }
+     
       if (request.method === 'POST' && path === '/api/data/wipe') {
         if (!permissionsFor(roleOf(user)).wipeData) throw fail(403, 'Your role cannot wipe monitoring data.');
         user.mailboxes = {};
