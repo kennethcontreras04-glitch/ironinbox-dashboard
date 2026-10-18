@@ -46,11 +46,18 @@ export function createSupabaseAuth(env) {
           ? payload.email
           : '',
       };
-    } catch {
-      throw Object.assign(
-        new Error('Invalid or expired session.'),
-        { status: 401 }
-      );
+    
+} catch (error) {
+  console.error('[SUPABASE JWT VERIFY]', {
+    code: error.code,
+    name: error.name,
+    message: error.message,
+  });
+
+  throw Object.assign(
+    new Error('Invalid or expired session.'),
+    { status: 401 }
+  );
     }
   };
 }
