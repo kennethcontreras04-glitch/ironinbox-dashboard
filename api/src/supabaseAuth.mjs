@@ -36,7 +36,6 @@ console.log('[IRONINBOX AUTH VERSION]', 'es256-check-v2');
       const { payload } = await jwtVerify(token, jwks, {
   issuer,
   audience: 'authenticated',
-  algorithms: ['ES256'],
 });
 
       if (
