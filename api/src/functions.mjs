@@ -3,20 +3,6 @@ import { createStorage } from './storage.mjs';
 import { createHandler } from './handler.mjs';
 
 let handler;
-app.http('auth-version-check', {
-  route: 'debug/auth-version',
-  methods: ['GET'],
-  authLevel: 'anonymous',
-  handler: async () => {
-    return {
-      status: 200,
-      jsonBody: {
-        version: 'auth-trace-v5',
-        timestamp: '2026-10-18'
-      }
-    };
-  }
-});
 app.http('ironinbox', {
   route: '{*path}', methods: ['GET', 'POST'], authLevel: 'anonymous',
   handler: async (request, context) => {

@@ -4,7 +4,7 @@ import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:
 import { createHandler } from '../src/handler.mjs';
 
 const env = { FRONTEND_URL: 'https://demo.azurestaticapps.net', GMAIL_REDIRECT_URI: 'https://demo.azurestaticapps.net/api/gmail/callback', GOOGLE_CLIENT_ID: 'google', GOOGLE_CLIENT_SECRET: 'test',
-  MICROSOFT_CLIENT_ID: 'microsoft', MICROSOFT_CLIENT_SECRET: 'test', MICROSOFT_REDIRECT_URI: 'https://demo.azurestaticapps.net/api/outlook/callback', TOKEN_ENCRYPTION_KEY: 'test-only-secret', SUPABASE_URL: 'https://example.supabase.co' };
+  MICROSOFT_CLIENT_ID: 'microsoft', MICROSOFT_CLIENT_SECRET: 'test', MICROSOFT_REDIRECT_URI: 'https://demo.azurestaticapps.net/api/outlook/callback', TOKEN_ENCRYPTION_KEY: 'test-only-secret' };
 const hash = value => createHash('sha256').update(value).digest('hex');
 const key = createHash('sha256').update(env.TOKEN_ENCRYPTION_KEY).digest();
 function encrypted(value) {

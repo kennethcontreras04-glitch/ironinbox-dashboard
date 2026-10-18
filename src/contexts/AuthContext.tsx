@@ -3,7 +3,6 @@ import type { User } from '@supabase/supabase-js';
 import { AuthContext } from './useAuth';
 // import { useSettings } from './useSettings'; // Temporarily removed during authentication migration
 import { supabase } from '../lib/supabase';
-import { apiFetch } from '../lib/api';
 
 export type IntegrationProvider = 'gmail';
 
@@ -36,7 +35,7 @@ export interface AuthContextType {
   monitoredEmail: string | null;
   accountIntegrations: AccountIntegration[];
   beginGmailSignIn: () => void;
-  disconnectIntegration: (provider: IntegrationProvider) => Promise<void>;
+  disconnectIntegration: (provider: IntegrationProvider) => void;
 }
 
 const mapSupabaseUser = (supabaseUser: User): IronInboxUser => ({
@@ -95,53 +94,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
   // Check whether Gmail is connected
  useEffect(() => {
-  if (!user) {
-    return;
-  }
+  if (!user) return;
 
   let active = true;
 
-  const checkGmailStatus = async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        return;
-      }
-
-      const response = await fetch('/api/gmail/status', {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (!response.ok) {
-        console.error(
-          'Gmail status failed:',
-          response.status,
-          await response.text()
-        );
-        return;
-      }
+  void fetch('/api/gmail/status')
+    .then(async response => {
+      if (!response.ok) return;
 
       const account = (await response.json()) as {
         connected: boolean;
-        email?: string;
+        email: string;
       };
 
       if (active) {
         setMonitoredEmail(
-          account.connected ? account.email ?? null : null
+          account.connected ? account.email : null
         );
       }
-    } catch (error) {
-      console.error('Failed to check Gmail status:', error);
-    }
-  };
-
-  void checkGmailStatus();
+    })
+    .catch(() => {
+      // Authentication works even if Gmail is unavailable.
+    });
 
   return () => {
     active = false;
@@ -190,55 +164,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     setMonitoredEmail(null);
   };
 
-  const beginGmailSignIn = async () => {
-  const response = await apiFetch('/api/gmail/connect/start', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({}),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    throw new Error(error?.error || 'Unable to start Gmail connection.');
-  }
-
-  const { authorizationUrl } = await response.json();
-
-  window.location.assign(authorizationUrl);
+  const beginGmailSignIn = () => {
+  window.alert(
+    'Gmail integration will be available after the authentication migration.'
+  );
 };
 
-const disconnectIntegration = async (provider: IntegrationProvider) => {
+const disconnectIntegration = (provider: IntegrationProvider) => {
   if (provider !== 'gmail') return;
 
-  const response = await apiFetch('/api/gmail/status');
-
-  if (!response.ok) {
-    throw new Error('Unable to retrieve Gmail connection.');
-  }
-
-  const data = await response.json();
-
-  const gmail = data.mailboxes?.find(
-    (mailbox: { provider: string }) => mailbox.provider === 'gmail'
+  window.alert(
+    'Gmail disconnection will be available after API integration.'
   );
-
-  if (!gmail) {
-    throw new Error('No Gmail account is connected.');
-  }
-
-  const disconnectResponse = await apiFetch('/api/gmail/disconnect', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mailboxId: gmail.id }),
-  });
-
-  if (!disconnectResponse.ok) {
-    throw new Error('Unable to disconnect Gmail.');
-  }
-
-  setMonitoredEmail(null);
 };
 
   //const accountIntegrations: AccountIntegration[] = [];
