@@ -1,5 +1,5 @@
 
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from 'jose';
 
 export function createSupabaseAuth(env) {
   const supabaseUrl = env.SUPABASE_URL?.replace(/\/$/, '');
@@ -24,6 +24,13 @@ export function createSupabaseAuth(env) {
     }
 
     const token = authorization.slice(7);
+    
+    const jwtHeader = decodeProtectedHeader(token);
+
+console.log('[JWT HEADER]', {
+  algorithm: jwtHeader.alg,
+  keyId: jwtHeader.kid,
+});
 
     try {
       const { payload } = await jwtVerify(token, jwks, {
@@ -54,7 +61,12 @@ export function createSupabaseAuth(env) {
   message: error?.message,
   cause: error?.cause?.message,
 });
-
+console.error('[JWT DIAGNOSTIC]', {
+  code: error?.code,
+  name: error?.name,
+  message: error?.message,
+  stack: error?.stack,
+});
   throw Object.assign(
   new Error(
     `JWT verification failed: ${error?.code || error?.name || 'unknown'}`
