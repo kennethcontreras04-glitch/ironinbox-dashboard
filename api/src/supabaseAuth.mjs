@@ -36,6 +36,7 @@ console.log('[IRONINBOX AUTH VERSION]', 'es256-check-v2');
       const { payload } = await jwtVerify(token, jwks, {
   issuer,
   audience: 'authenticated',
+  algorithms: ['ES256'],
 });
 
       if (
@@ -67,7 +68,9 @@ console.error('[JWT DIAGNOSTIC]', {
   stack: error?.stack,
 });
   throw Object.assign(
-  new Error(`AUTH-V2: ${error?.code || error?.name || 'unknown'}`),
+  new Error(
+    `AUTH-V3: ${error?.code || error?.name || 'unknown'}: ${error?.message || 'No details'}`
+  ),
   { status: 401 }
 );
     }
