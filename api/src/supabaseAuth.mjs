@@ -49,15 +49,18 @@ export function createSupabaseAuth(env) {
     
 } catch (error) {
   console.error('[SUPABASE JWT VERIFY]', {
-    code: error.code,
-    name: error.name,
-    message: error.message,
-  });
+  code: error?.code,
+  name: error?.name,
+  message: error?.message,
+  cause: error?.cause?.message,
+});
 
   throw Object.assign(
-    new Error('Invalid or expired session.'),
-    { status: 401 }
-  );
+  new Error(
+    `JWT verification failed: ${error?.code || error?.name || 'unknown'}`
+  ),
+  { status: 401 }
+);
     }
   };
 }
