@@ -24,14 +24,14 @@ export function createSupabaseAuth(env) {
     }
 
     const token = authorization.slice(7);
-    
+
     const jwtHeader = decodeProtectedHeader(token);
 
 console.log('[JWT HEADER]', {
   algorithm: jwtHeader.alg,
   keyId: jwtHeader.kid,
 });
-
+console.log('[IRONINBOX AUTH VERSION]', 'es256-check-v2');
     try {
       const { payload } = await jwtVerify(token, jwks, {
   issuer,
