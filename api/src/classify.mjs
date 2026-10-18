@@ -93,8 +93,6 @@ function hostOf(value) {
   }
 }
 
-const MAX_HTML_CHARS = 100_000;
-
 function extractLinks(html, text) {
   const links = [];
   const seen = new Set();
@@ -147,8 +145,7 @@ function trustedAuthHeader(headers) {
 export function normalizeGmailMessage({ id, threadId, labelIds = [], snippet = '', payload = {}, internalDate }) {
   const headers = payload.headers || [];
   const parts = walkParts(payload, { text: '', html: '', attachments: [] });
-  const html = (parts.html || '').slice(0, MAX_HTML_CHARS);
-  const text = (parts.text || htmlToText(html)).slice(0, 60_000);
+  const text = (parts.text || htmlToText(parts.html)).slice(0, 60_000);
   return {
     schemaVersion: SCHEMA_VERSION,
     id,
@@ -161,7 +158,7 @@ export function normalizeGmailMessage({ id, threadId, labelIds = [], snippet = '
     subject: header(headers, 'Subject') || '(no subject)',
     snippet,
     text,
-    links: extractLinks(html, text),
+    links: extractLinks(parts.html, text),
     attachments: parts.attachments,
     auth: parseAuthenticationResults(trustedAuthHeader(headers)),
   };
@@ -256,19 +253,6 @@ function escapeRegExp(value) {
 
 const PHRASE_PATTERNS = PHRASES.map((phrase) => ({ phrase, pattern: new RegExp(`\\b${escapeRegExp(phrase)}`, 'i') }));
 
-// Everyday words that show up in ordinary business mail. They remain visible
-// signals, but their combined weight stays below Medium (30) unless a more
-// specific keyword or another detector also fires.
-export const COMMON_KEYWORDS = new Set([
-  'account', 'accounts', 'security', 'confirm', 'confirmation',
-  'expires', 'expire', 'expired', 'update', 'updated',
-  'password', 'login', 'email', 'user', 'access',
-  'notification', 'alert', 'information',
-]);
-const COMMON_KEYWORD_WEIGHT = 5;
-const COMMON_KEYWORD_CAP = 20;
-const SPECIFIC_KEYWORD_WEIGHT = 10;
-
 export function riskLevel(score) {
   if (score >= 75) return 'Critical';
   if (score >= 55) return 'High';
@@ -285,7 +269,6 @@ export function riskLevel(score) {
 // sender/infrastructure); `detector` says which rule actually fired.
 // The final score always equals the sum of signal weights (clamped to 0-100).
 export function gradeEmail(email, { keywords = [], options = {} } = {}) {
-  const settings = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
   const signals = [];
   let score = 0;
   const add = (points, signal) => { score += points; signals.push({ source: 'server', weight: points, ...signal }); };
@@ -294,49 +277,26 @@ export function gradeEmail(email, { keywords = [], options = {} } = {}) {
   const fromName = email.from?.name || '';
 
   // 1. User keywords from the Keyword Monitoring page.
-  // Common words such as "account" and "security" match whole words only and
-  // are capped so they cannot raise an otherwise normal message to Medium.
-  const matchSubject = settings.matchInSubject !== false;
-  const matchBody = settings.matchInBody !== false;
+  const matchSubject = options.matchInSubject !== false;
+  const matchBody = options.matchInBody !== false;
   const haystack = `${matchSubject ? email.subject : ''} ${matchBody ? email.text : ''}`;
-  const caseInsensitive = settings.caseInsensitive !== false;
-  const source = caseInsensitive ? haystack.toLowerCase() : haystack;
-  let commonPoints = 0;
-  const terms = Array.isArray(keywords) ? keywords.slice(0, 200) : [];
-  for (const keyword of terms) {
-    // Bound each term before it is compiled into a pattern (ASVS V5.1.3, V5.1.4).
-    const raw = String(keyword).trim().slice(0, 200);
-    const needle = caseInsensitive ? raw.toLowerCase() : raw;
+  const caseInsensitive = options.caseInsensitive !== false;
+  const lowered = caseInsensitive ? haystack.toLowerCase() : haystack;
+  for (const keyword of keywords) {
+    const needle = caseInsensitive ? String(keyword).toLowerCase() : String(keyword);
     if (!needle) continue;
-    const common = COMMON_KEYWORDS.has(needle.toLowerCase());
-    const flags = caseInsensitive ? 'i' : '';
-    const hit = settings.wholeWordOnly || common
-      ? new RegExp(`\\b${escapeRegExp(needle)}\\b`, flags).test(source)
-      : source.includes(needle);
-    if (!hit) continue;
-    let points = common ? COMMON_KEYWORD_WEIGHT : SPECIFIC_KEYWORD_WEIGHT;
-    if (common) {
-      points = Math.min(points, Math.max(0, COMMON_KEYWORD_CAP - commonPoints));
-      commonPoints += points;
-    }
-    if (points <= 0) continue;
-    add(points, {
-      type: 'keyword',
-      detector: 'user-keyword',
-      value: raw,
-      description: common
-        ? `Common keyword noted at low weight: ${raw}`
-        : `Contains monitored keyword: ${raw}`,
-    });
+    const hit = options.wholeWordOnly
+      ? new RegExp(`\\b${escapeRegExp(needle)}\\b`).test(lowered)
+      : lowered.includes(needle);
+    if (hit) add(10, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
   }
 
-  // 2. Built-in pressure / credential phrases. Four hits reach Medium, but text
-  // alone stays under the flag line (50) and cannot reach High or Critical.
+  // 2. Built-in pressure / credential phrases (capped so text alone can't reach Critical).
   const text = `${email.subject} ${email.text}`;
   const phraseHits = PHRASE_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ phrase }) => phrase);
   if (phraseHits.length) {
     const shown = phraseHits.slice(0, 3).join(', ');
-    add(Math.min(32, phraseHits.length * 8), { type: 'keyword', detector: 'phrase', value: shown, description: `Pressure or credential language: ${shown}` });
+    add(Math.min(24, phraseHits.length * 8), { type: 'keyword', detector: 'phrase', value: shown, description: `Pressure or credential language: ${shown}` });
   }
 
   // 3. Google's own SPF / DKIM / DMARC verdicts.
@@ -439,7 +399,7 @@ export function normalizeOutlookMessage(message) {
     const email = (item?.emailAddress?.address || '').toLowerCase();
     return { name: item?.emailAddress?.name || '', email, domain: email.split('@')[1] || '' };
   };
-  const html = (message.body?.contentType?.toLowerCase() === 'html' ? message.body.content || '' : '').slice(0, MAX_HTML_CHARS);
+  const html = message.body?.contentType?.toLowerCase() === 'html' ? message.body.content || '' : '';
   const text = (html ? htmlToText(html) : message.body?.content || '').slice(0, 60_000);
   return {
     schemaVersion: SCHEMA_VERSION, sourceProvider: 'outlook', id: message.id,
