@@ -42,7 +42,12 @@ console.log('[JWT HEADER]', {
   algorithm: jwtHeader.alg,
   keyId: jwtHeader.kid,
 });
-console.log('[IRONINBOX AUTH VERSION]', 'es256-check-v2');
+console.log('[IRONINBOX AUTH VERSION]', 'auth-trace-v5');
+console.log('[IRONINBOX AUTH REQUEST]', {
+  path: new URL(request.url).pathname,
+  algorithm: tokenHeader.alg,
+  keyId: tokenHeader.kid ?? null,
+});
     try {
       const { payload } = await jwtVerify(token, jwks, {
   issuer,
