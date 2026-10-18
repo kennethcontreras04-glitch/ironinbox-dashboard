@@ -142,12 +142,17 @@ async function readJson(request) {
   return body;
 }
 
-export function createHandler({ env, storage, fetcher = fetch }) {
+export function createHandler({
+  env,
+  storage,
+  fetcher = fetch,
+  verifyUser,
+}) {
   const frontend = env.FRONTEND_URL?.replace(/\/$/, '');
   const key = env.TOKEN_ENCRYPTION_KEY ? createHash('sha256').update(env.TOKEN_ENCRYPTION_KEY).digest() : null;
   const ready = Boolean(frontend && key && storage);
   const providers = createProviders(env, fetcher);
-  const verifySupabaseUser = createSupabaseAuth(env);
+  const verifySupabaseUser = verifyUser ?? createSupabaseAuth(env);
 
 async function authenticatedUser(request) {
   const identity = await verifySupabaseUser(request);
@@ -530,8 +535,21 @@ const user = record.value;
       return json(404, { error: 'Not found.' });
     } catch (error) {
       const status = error.status || ([412, 404].includes(error.statusCode) ? 409 : 500);
+     
       context.error?.(`API request failed (${status})`);
-      if (/^\/api\/(gmail|outlook)\/callback$/.test(path)) return redirect(`${frontend}/${callbackIntent === 'connect' ? 'account?connection' : 'login?auth'}=error`, [cookie('ironinbox_oauth', '', 0)]);
+      if (/^\/api\/(gmail|outlook)\/callback$/.test(path)) {
+  const isGmailCallback = path === '/api/gmail/callback';
+
+  const errorDestination =
+    isGmailCallback || callbackIntent === 'connect'
+      ? 'account?connection=error'
+      : 'login?auth=error';
+
+  return redirect(
+    `${frontend}/${errorDestination}`,
+    [cookie('ironinbox_oauth', '', 0)]
+  );
+}
       return json(status, { error: error.status ? error.message : status === 409 ? 'Account changed during this request. Please retry.' : 'The API request failed. Please try again.' });
     }
   };
