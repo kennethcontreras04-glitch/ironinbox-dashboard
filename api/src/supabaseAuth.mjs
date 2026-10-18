@@ -68,9 +68,7 @@ console.error('[JWT DIAGNOSTIC]', {
   stack: error?.stack,
 });
   throw Object.assign(
-  new Error(
-    `JWT verification failed: ${error?.code || error?.name || 'unknown'}`
-  ),
+  new Error(`AUTH-V2: ${error?.code || error?.name || 'unknown'}`),
   { status: 401 }
 );
     }
