@@ -18,7 +18,7 @@ export function createSupabaseAuth(env) {
   );
 
   return async function verifySupabaseUser(request) {
-    const authorization = request.headers.get('authorization');
+    const authorization = request.headers.get('x-supabase-authorization');
 
     if (!authorization?.startsWith('Bearer ')) {
       throw Object.assign(
