@@ -17,6 +17,7 @@ import { useSettings } from './useSettings';
 import { useAuth } from './useAuth';
 import { createIncidentFromEmail, createIncidentId, incidentForEmail } from '../utils/incidents';
 import { buildNotifications } from '../utils/notifications';
+import { apiFetch } from '../lib/api';
 
 const EMPTY_FLAGGED_EMAILS: FlaggedEmail[] = [];
 const EMPTY_KEYWORDS: Keyword[] = [];
@@ -167,7 +168,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const currentUser = gradingRef.current.user;
     if (!currentUser?.uid || ids.length === 0) return;
     try {
-      const response = await fetch('/api/emails/disposition', {
+      const response = await apiFetch('/api/emails/disposition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, disposition }),
@@ -183,19 +184,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncMailbox = async () => {
     const snapshot = gradingRef.current;
     const currentUser = snapshot.user;
-    if (!currentUser?.uid) return;
-    if (syncInFlight.current) { syncQueued.current = true; return; }
+
+if (!currentUser?.uid) return;
+
+const connectedMailboxes = snapshot.accountIntegrations.filter(
+  (account) => account.connected && account.monitoring
+);
+
+if (connectedMailboxes.length === 0) {
+  syncQueued.current = false;
+  setMailboxError(null);
+  setLastSyncedAt(null);
+  setFlaggedEmails([]);
+  setReleasedEmails([]);
+  return;
+}
+
+if (syncInFlight.current) {
+  syncQueued.current = true;
+  return;
+}
     syncInFlight.current = true;
     setMailboxSyncing(true);
     setMailboxError(null);
     const failures: string[] = [];
     const stillCurrent = () => gradingRef.current.user?.uid === currentUser.uid;
     try {
-      for (const mailbox of snapshot.accountIntegrations.filter(item => item.monitoring)) {
+      for (const mailbox of connectedMailboxes) {
         try {
           for (let batch = 0; batch < 10; batch++) {
             if (!stillCurrent()) return;
-            const response = await fetch('/api/mailboxes/sync', {
+            const response = await apiFetch('/api/mailboxes/sync', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ mailboxId: mailbox.id, keywords: snapshot.detectionActions.flagEmail ? snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value) : [], options: snapshot.detectionOptions, threshold: snapshot.riskFlagThreshold }),
             });
@@ -207,7 +226,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
         } catch (error) { failures.push(mailbox.accountEmail + ': ' + (error instanceof Error ? error.message : 'Sync failed.')); }
       }
-      const response = await fetch('/api/emails');
+      const response = await apiFetch('/api/emails');
       if (!response.ok) throw new Error('Unable to load mailbox messages.');
       const data = await response.json() as { messages: Array<FlaggedEmail & { disposition: EmailDisposition }> };
       if (stillCurrent()) {
@@ -238,7 +257,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     writeLocalWorkspace(currentUser.uid, payload);
     setWorkspaceSaveStatus('saving');
     try {
-      const response = await fetch('/api/workspace', {
+      const response = await apiFetch('/api/workspace', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -304,7 +323,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     void (async () => {
       try {
-        const response = await fetch('/api/workspace');
+        const response = await apiFetch('/api/workspace');
         if (!response.ok) throw new Error('workspace');
         const data = await response.json() as Partial<WorkspacePayload> & { saved?: boolean };
         if (cancelled) return;
@@ -353,13 +372,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [keywords, detectionOptions, detectionActions, incidents, riskFlagThreshold, user?.uid]);
 
   useEffect(() => {
-    if (!user?.uid || !advanced.autoRefresh) return;
-    const interval = window.setInterval(() => {
-      void syncMailboxRef.current();
-    }, advanced.refreshInterval);
-    return () => window.clearInterval(interval);
-  }, [user?.uid, advanced.autoRefresh, advanced.refreshInterval]);
+  const hasConnectedMailbox = accountIntegrations.some(
+    (account) => account.connected && account.monitoring
+  );
 
+  if (!user?.uid || !advanced.autoRefresh || !hasConnectedMailbox) {
+    return;
+  }
+
+  const interval = window.setInterval(() => {
+    void syncMailboxRef.current();
+  }, advanced.refreshInterval);
+
+  return () => window.clearInterval(interval);
+}, [
+  user?.uid,
+  advanced.autoRefresh,
+  advanced.refreshInterval,
+  accountIntegrations,
+]);
   useEffect(() => {
     const connectedIds = new Set(accountIntegrations.map(account => account.id));
     setFlaggedEmails(items => items.filter(item => item.mailboxId && connectedIds.has(item.mailboxId)));
@@ -402,7 +433,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const wipeAllData = async () => {
     if (user?.uid) {
-      const response = await fetch('/api/data/wipe', {
+      const response = await apiFetch('/api/data/wipe', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
       });
       if (!response.ok) throw new Error('Unable to wipe mailbox data. Please try again.');

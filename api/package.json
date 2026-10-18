@@ -3,7 +3,17 @@
   "private": true,
   "type": "module",
   "main": "src/functions.mjs",
-  "engines": { "node": ">=20" },
-  "scripts": { "start": "func start --port 8787", "test": "node --test test/*.test.mjs" },
-  "dependencies": { "@azure/functions": "^4.7.0", "@azure/storage-blob": "^12.27.0" }
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "func start --port 8787",
+    "test": "node --test test/classifier.test.mjs test/supabase-gmail.test.mjs",
+    "test:all": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.7.0",
+    "@azure/storage-blob": "^12.27.0",
+    "jose": "^6.2.12"
+  }
 }
