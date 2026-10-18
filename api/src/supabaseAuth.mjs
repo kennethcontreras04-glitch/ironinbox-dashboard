@@ -27,10 +27,10 @@ export function createSupabaseAuth(env) {
 
     try {
       const { payload } = await jwtVerify(token, jwks, {
-        issuer,
-        audience: 'authenticated',
-        algorithms: ['ES256', 'RS256'],
-      });
+  issuer,
+  audience: 'authenticated',
+  algorithms: ['ES256'],
+});
 
       if (
         typeof payload.sub !== 'string' ||
