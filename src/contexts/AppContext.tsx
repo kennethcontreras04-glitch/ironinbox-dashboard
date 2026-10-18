@@ -184,15 +184,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncMailbox = async () => {
     const snapshot = gradingRef.current;
     const currentUser = snapshot.user;
-    if (!currentUser?.uid) return;
-    if (syncInFlight.current) { syncQueued.current = true; return; }
+
+if (!currentUser?.uid) return;
+
+const connectedMailboxes = snapshot.accountIntegrations.filter(
+  (account) => account.connected && account.monitoring
+);
+
+if (connectedMailboxes.length === 0) {
+  syncQueued.current = false;
+  setMailboxError(null);
+  setLastSyncedAt(null);
+  setFlaggedEmails([]);
+  setReleasedEmails([]);
+  return;
+}
+
+if (syncInFlight.current) {
+  syncQueued.current = true;
+  return;
+}
     syncInFlight.current = true;
     setMailboxSyncing(true);
     setMailboxError(null);
     const failures: string[] = [];
     const stillCurrent = () => gradingRef.current.user?.uid === currentUser.uid;
     try {
-      for (const mailbox of snapshot.accountIntegrations.filter(item => item.monitoring)) {
+      for (const mailbox of connectedMailboxes) {
         try {
           for (let batch = 0; batch < 10; batch++) {
             if (!stillCurrent()) return;
@@ -354,13 +372,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [keywords, detectionOptions, detectionActions, incidents, riskFlagThreshold, user?.uid]);
 
   useEffect(() => {
-    if (!user?.uid || !advanced.autoRefresh) return;
-    const interval = window.setInterval(() => {
-      void syncMailboxRef.current();
-    }, advanced.refreshInterval);
-    return () => window.clearInterval(interval);
-  }, [user?.uid, advanced.autoRefresh, advanced.refreshInterval]);
+  const hasConnectedMailbox = accountIntegrations.some(
+    (account) => account.connected && account.monitoring
+  );
 
+  if (!user?.uid || !advanced.autoRefresh || !hasConnectedMailbox) {
+    return;
+  }
+
+  const interval = window.setInterval(() => {
+    void syncMailboxRef.current();
+  }, advanced.refreshInterval);
+
+  return () => window.clearInterval(interval);
+}, [
+  user?.uid,
+  advanced.autoRefresh,
+  advanced.refreshInterval,
+  accountIntegrations,
+]);
   useEffect(() => {
     const connectedIds = new Set(accountIntegrations.map(account => account.id));
     setFlaggedEmails(items => items.filter(item => item.mailboxId && connectedIds.has(item.mailboxId)));
