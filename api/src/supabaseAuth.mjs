@@ -1,5 +1,9 @@
 
-import { createRemoteJWKSet, jwtVerify, decodeProtectedHeader } from 'jose';
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  decodeProtectedHeader,
+} from 'jose';
 
 export function createSupabaseAuth(env) {
   const supabaseUrl = env.SUPABASE_URL?.replace(/\/$/, '');
@@ -24,6 +28,13 @@ export function createSupabaseAuth(env) {
     }
 
     const token = authorization.slice(7);
+
+    const tokenHeader = decodeProtectedHeader(token);
+
+console.log('[JWT INCOMING HEADER]', {
+  algorithm: tokenHeader.alg,
+  keyId: tokenHeader.kid,
+});
 
     const jwtHeader = decodeProtectedHeader(token);
 
@@ -69,7 +80,8 @@ console.error('[JWT DIAGNOSTIC]', {
 });
   throw Object.assign(
   new Error(
-    `AUTH-V3: ${error?.code || error?.name || 'unknown'}: ${error?.message || 'No details'}`
+    `AUTH-V4: tokenAlg=${tokenHeader?.alg ?? 'unknown'}; ` +
+    `error=${error?.code ?? error?.name}: ${error?.message}`
   ),
   { status: 401 }
 );
