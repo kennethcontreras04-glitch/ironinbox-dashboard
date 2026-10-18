@@ -30,6 +30,13 @@ export function createSupabaseAuth(env) {
     const token = authorization.slice(7);
 
     const tokenHeader = decodeProtectedHeader(token);
+    const requestPath = new URL(request.url).pathname;
+
+console.log('[AUTH TRACE]', {
+  path: requestPath,
+  algorithm: tokenHeader.alg,
+  keyId: tokenHeader.kid ?? null,
+});
 
 console.log('[JWT INCOMING HEADER]', {
   algorithm: tokenHeader.alg,
@@ -85,8 +92,10 @@ console.error('[JWT DIAGNOSTIC]', {
 });
   throw Object.assign(
   new Error(
-    `AUTH-V4: tokenAlg=${tokenHeader?.alg ?? 'unknown'}; ` +
-    `error=${error?.code ?? error?.name}: ${error?.message}`
+    `AUTH-V5: path=${new URL(request.url).pathname}; ` +
+    `tokenAlg=${tokenHeader.alg}; ` +
+    `keyId=${tokenHeader.kid ?? 'none'}; ` +
+    `error=${error?.code ?? error?.name}`
   ),
   { status: 401 }
 );
