@@ -73,7 +73,7 @@ export function createProviders(env, fetcher = fetch) {
         const listed = await graph(`mailFolders/inbox/messages?$top=50&$orderby=receivedDateTime%20desc&$select=${fields}`);
         const ids = (listed.value || []).map(item => item.id);
         const pending = ids.filter(id => !isCurrent(mailbox.messages[id])).slice(0, 5);
-        const emails = await Promise.all(pending.map(async id => {
+        const loadEmail = async id => {
           // Bound work to the managed Functions limit; never request attachment bytes.
           const message = await graph(`messages/${encodeURIComponent(id)}?$select=${fields},body,hasAttachments`);
           const attachments = [];
@@ -93,7 +93,16 @@ export function createProviders(env, fetcher = fetch) {
             if (route) throw fail(502, 'This message has too many attachments to analyze in one request.');
           }
           return normalizeOutlookMessage({ ...message, attachments });
-        }));
+        };
+        const emails = [];
+        // Outlook permits at most four concurrent requests per app/mailbox.
+        // Drain each group even on failure so requests cannot outlive this sync.
+        for (let offset = 0; offset < pending.length; offset += 4) {
+          const results = await Promise.allSettled(pending.slice(offset, offset + 4).map(loadEmail));
+          const failed = results.find(result => result.status === 'rejected');
+          if (failed) throw failed.reason;
+          emails.push(...results.map(result => result.value));
+        }
         return { ids, emails, hasMore: ids.some(id => !isCurrent(mailbox.messages[id]) && !pending.includes(id)) };
       },
     }];
