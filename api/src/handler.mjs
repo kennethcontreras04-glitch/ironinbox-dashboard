@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt as sc
 import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
+import { checkSupabaseConnection } from './supabaseHealth.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -225,6 +226,14 @@ export function createHandler({ env, storage, fetcher = fetch }) {
     try {
       if (request.method === 'GET' && path === '/api/health') return json(200, { configured: ready,
         providers: Object.fromEntries(Object.entries(providers).map(([name, provider]) => [name, provider.configured])) });
+        if (request.method === 'GET' && path === '/api/health/supabase') {
+  if (env.IRONINBOX_ENABLE_SUPABASE_DIAGNOSTICS !== 'true') {
+    throw fail(404, 'Not found.');
+  }
+
+  const result = await checkSupabaseConnection(env, fetcher);
+  return json(result.connected ? 200 : 503, result);
+}
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
       if (request.method === 'POST' && (request.headers.get('origin') !== frontend || !request.headers.get('content-type')?.startsWith('application/json'))) throw fail(403, 'Request origin or content type is not allowed.');
       if (request.method === 'POST' && ['/api/auth/register', '/api/auth/password'].includes(path)) {
