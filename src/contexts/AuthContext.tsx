@@ -17,8 +17,6 @@ export interface AuthContextType {
   signOut: () => Promise<void>; refreshAccounts: () => Promise<void>;
   disconnectIntegration: (id: string) => Promise<void>;
   setMonitoring: (id: string, monitoring: boolean) => Promise<void>;
-  supabaseSignIn: (email: string, password: string) => Promise<void>;
-  supabaseRegister: (firstName: string, lastName: string, email: string, password: string) => Promise<string>;
 }
 async function mutate(path: string, body: object = {}) {
   const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -63,49 +61,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await mutate(register ? '/api/auth/register' : '/api/auth/password', { username, password });
     await refreshAccounts();
   };
-  
-const supabaseSignIn = async (email: string, password: string) => {
-  await mutate('/api/auth/supabase/login', {
-    email,
-    password,
-  });
-
-  await refreshAccounts();
-};
-
-
-const supabaseRegister = async (
-  firstName: string,
-  lastName: string,
-  email: string,
-  password: string
-): Promise<string> => {
-  const response = await fetch('/api/auth/supabase/register', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      firstName,
-      lastName,
-      email,
-      password,
-    }),
-  });
-
-  const data = await response.json() as {
-    error?: string;
-    message?: string;
-  };
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Unable to create account.');
-  }
-
-  return data.message || 'Registration submitted. Check your email.';
-};
-
-
   const disconnectIntegration = async (mailboxId: string) => { await mutate('/api/mailboxes/disconnect', { mailboxId }); await refreshAccounts(); };
   const setMonitoring = async (mailboxId: string, monitoring: boolean) => { await mutate('/api/mailboxes/monitoring', { mailboxId, monitoring }); await refreshAccounts(); };
   return <AuthContext.Provider value={{
@@ -113,6 +68,6 @@ const supabaseRegister = async (
     beginGmailSignIn: () => window.location.assign('/api/auth/gmail/start'),
     beginMicrosoftSignIn: () => window.location.assign('/api/auth/outlook/start'),
     addMailbox: (provider, same = false, mailboxId) => window.location.assign(`/api/${provider}/connect?${new URLSearchParams({ ...(same ? { same: '1' } : {}), ...(mailboxId ? { mailboxId } : {}) })}`),
-    passwordSignIn, supabaseSignIn, supabaseRegister, signOut, refreshAccounts, disconnectIntegration, setMonitoring,
+    passwordSignIn, signOut, refreshAccounts, disconnectIntegration, setMonitoring,
   }}>{children}</AuthContext.Provider>;
 };

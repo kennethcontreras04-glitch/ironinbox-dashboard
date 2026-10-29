@@ -5,14 +5,11 @@ import { RiGoogleFill, RiMicrosoftFill } from 'react-icons/ri';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { beginGmailSignIn, beginMicrosoftSignIn, supabaseSignIn, supabaseRegister, user } = useAuth();
+  const { beginGmailSignIn, beginMicrosoftSignIn, passwordSignIn, user } = useAuth();
   const [error, setError] = useState(() => new URLSearchParams(window.location.search).get('auth') === 'error' ? 'Sign-in failed or expired. Please try again.' : '');
   const [busy, setBusy] = useState(false);
   const [register, setRegister] = useState(false);
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [success, setSuccess] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [providers, setProviders] = useState({ gmail: false, outlook: false });
   useEffect(() => {
@@ -21,39 +18,12 @@ const Login: React.FC = () => {
   useEffect(() => {
     if (user) navigate('/account', { replace: true });
   }, [user, navigate]);
-  
-const submit = async (event: React.FormEvent) => {
-  event.preventDefault();
-  setBusy(true);
-  setError('');
-  setSuccess('');
-
-  try {
-    if (register) {
-      const message = await supabaseRegister(
-        firstName,
-        lastName,
-        email,
-        password
-      );
-
-      setSuccess(message);
-      setRegister(false);
-    } else {
-      await supabaseSignIn(email, password);
-    }
-  } catch (err) {
-    setError(
-      err instanceof Error
-        ? err.message
-        : 'Unable to complete authentication.'
-    );
-  } finally {
-    setBusy(false);
-    setPassword('');
-  }
-};
-
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setBusy(true); setError('');
+    try { await passwordSignIn(username, password, register); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed.'); }
+    finally { setBusy(false); setPassword(''); }
+  };
   const button = 'w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border border-slate-200 text-sm font-medium disabled:opacity-50 dark:border-[var(--dm-border)]';
   const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 bg-transparent dark:border-[var(--dm-border)]';
   return (
@@ -123,103 +93,16 @@ const submit = async (event: React.FormEvent) => {
 
           <button className={button + ' mt-3'} disabled={busy || !providers.outlook} onClick={beginMicrosoftSignIn}><RiMicrosoftFill /> Continue with Microsoft</button>
           {!providers.outlook && <p className="text-xs text-slate-500 mt-2">Microsoft connection requires administrator setup.</p>}
-          
-<form
-  onSubmit={submit}
-  className="space-y-3 border-t border-slate-200 mt-5 pt-4 dark:border-[var(--dm-border)] dark:text-[var(--dm-text-primary)]"
->
-  <h2 className="text-sm font-semibold">
-    {register ? 'Create an account' : 'Sign in with email and password'}
-  </h2>
-
-  {register && (
-    <div className="grid grid-cols-2 gap-3">
-      <label className="block text-sm">
-        First name
-        <input
-          className={input}
-          value={firstName}
-          onChange={event => setFirstName(event.target.value)}
-          autoComplete="given-name"
-          required
-          maxLength={100}
-        />
-      </label>
-
-      <label className="block text-sm">
-        Last name
-        <input
-          className={input}
-          value={lastName}
-          onChange={event => setLastName(event.target.value)}
-          autoComplete="family-name"
-          required
-          maxLength={100}
-        />
-      </label>
-    </div>
-  )}
-
-  <label className="block text-sm">
-    Email address
-    <input
-      className={input}
-      type="email"
-      autoComplete="email"
-      value={email}
-      onChange={event => setEmail(event.target.value)}
-      required
-      maxLength={254}
-    />
-  </label>
-
-  <label className="block text-sm">
-    Password
-    <input
-      className={input}
-      type="password"
-      autoComplete={register ? 'new-password' : 'current-password'}
-      value={password}
-      onChange={event => setPassword(event.target.value)}
-      required
-      minLength={register ? 12 : 1}
-      maxLength={128}
-    />
-  </label>
-
-  {register && (
-    <p className="text-xs text-slate-500">
-      Use at least 12 characters. You may need to verify your email
-      before signing in.
-    </p>
-  )}
-
-  <button
-    type="submit"
-    className={button + ' bg-blue-600 text-white'}
-    disabled={busy}
-  >
-    {busy
-      ? 'Please wait...'
-      : register
-        ? 'Create account'
-        : 'Sign in'}
-  </button>
-</form>
-
-          <button className="text-sm text-blue-600 my-4" onClick={() => { setRegister(!register); setError(''); }}>{register ? 'Already have an account? Sign in' : 'Create an account with email and password'}</button>
+          <form onSubmit={submit} className="space-y-3 border-t border-slate-200 mt-5 pt-4 dark:border-[var(--dm-border)] dark:text-[var(--dm-text-primary)]">
+            <h2 className="text-sm font-semibold">{register ? 'Create an account' : 'Sign in with username and password'}</h2>
+            <label className="block text-sm">Username<input className={input} autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required minLength={3} maxLength={64} pattern="[a-zA-Z0-9._\-]+" /></label>
+            <label className="block text-sm">Password<input className={input} type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={event => setPassword(event.target.value)} required minLength={12} maxLength={128} /></label>
+            {register && <p className="text-xs text-slate-500">Use at least 12 characters. Keep your password safe; password recovery is not available yet.</p>}
+            <button className={button + ' bg-blue-600 text-white'} disabled={busy}>{busy ? 'Please wait…' : register ? 'Create account' : 'Sign in'}</button>
+          </form>
+          <button className="text-sm text-blue-600 my-4" onClick={() => { setRegister(!register); setError(''); }}>{register ? 'Already have an account? Sign in' : 'Create an account with username and password'}</button>
 
           {/* Error */}
-          
-{success && (
-  <div
-    role="status"
-    className="mb-4 px-3 py-2.5 rounded-lg text-xs bg-green-50 border border-green-200 text-green-700 dark:bg-green-950/30 dark:text-green-400"
-  >
-    {success}
-  </div>
-)}
-
           {error && (
             <div className="mb-4 px-3 py-2.5 rounded-lg text-xs
                             bg-red-50 border border-red-200 text-red-600

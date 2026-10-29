@@ -2,7 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt as sc
 import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
-import { createSupabaseAuth } from './supabaseAuth.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -120,7 +119,6 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   const key = env.TOKEN_ENCRYPTION_KEY ? createHash('sha256').update(env.TOKEN_ENCRYPTION_KEY).digest() : null;
   const ready = Boolean(frontend && key && storage);
   const providers = createProviders(env, fetcher);
-  const supabaseAuth = createSupabaseAuth(env);
   const secure = !frontend?.startsWith('http://localhost:');
   const cookie = (name, value, maxAge) => ({ name, value, maxAge, path: '/', httpOnly: true, secure, sameSite: 'Lax' });
   const cookiesOf = request => Object.fromEntries((request.headers.get('cookie') || '').split(';').map(x => x.trim().split('=')));
@@ -229,115 +227,6 @@ export function createHandler({ env, storage, fetcher = fetch }) {
         providers: Object.fromEntries(Object.entries(providers).map(([name, provider]) => [name, provider.configured])) });
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
       if (request.method === 'POST' && (request.headers.get('origin') !== frontend || !request.headers.get('content-type')?.startsWith('application/json'))) throw fail(403, 'Request origin or content type is not allowed.');
-      
-if (request.method === 'POST' && path === '/api/auth/supabase/register') {
-  if (!supabaseAuth) {
-    throw fail(503, 'Supabase authentication is not configured.');
-  }
-
-  const body = await readJson(request);
-
-  const email = typeof body.email === 'string'
-    ? body.email.trim().toLowerCase()
-    : '';
-
-  const firstName = typeof body.firstName === 'string'
-    ? body.firstName.trim()
-    : '';
-
-  const lastName = typeof body.lastName === 'string'
-    ? body.lastName.trim()
-    : '';
-
-  if (
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-    !firstName ||
-    !lastName ||
-    firstName.length > 100 ||
-    lastName.length > 100 ||
-    typeof body.password !== 'string' ||
-    body.password.length < 12 ||
-    body.password.length > 128
-  ) {
-    throw fail(400, 'Provide a valid email, first name, last name, and a password of 12–128 characters.');
-  }
-
-  await throttle(`supabase-register:${email}`);
-
-  try {
-    const result = await supabaseAuth.register(
-      email,
-      body.password,
-      firstName,
-      lastName
-    );
-
-    return json(202, {
-      registered: true,
-      requiresConfirmation: result.requiresConfirmation,
-      message: result.requiresConfirmation
-        ? 'Check your email to confirm your account before signing in.'
-        : 'Account created. You can now sign in.',
-    });
-  } catch (error) {
-    throw fail(400, 'Unable to complete registration. Please check your details or try again later.');
-  }
-}
-
-if (request.method === 'POST' && path === '/api/auth/supabase/login') {
-  if (!supabaseAuth) {
-    throw fail(503, 'Supabase authentication is not configured.');
-  }
-
-  const body = await readJson(request);
-
-  const email = typeof body.email === 'string'
-    ? body.email.trim().toLowerCase()
-    : '';
-
-  if (
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-    typeof body.password !== 'string' ||
-    !body.password
-  ) {
-    throw fail(400, 'Enter a valid email address and password.');
-  }
-
-  await throttle(`supabase-login:${email}`);
-
-  let profile;
-
-  try {
-    profile = await supabaseAuth.signIn(email, body.password);
-  } catch {
-    throw fail(401, 'Unable to sign in. Check your credentials and verify your email.');
-  }
-
-  if (!profile.id || !profile.email) {
-    throw fail(401, 'Unable to verify the account.');
-  }
-
-  const fullName = [profile.firstName, profile.lastName]
-    .filter(Boolean)
-    .join(' ')
-    .trim();
-
-  const identity = await identityUser('password', {
-    subject: `supabase:${profile.id}`,
-    email: profile.email,
-    name: fullName || profile.email,
-  });
-
-  if (!identity) {
-    throw fail(500, 'Unable to initialize your IronInbox account.');
-  }
-
-  return json(200, {
-    signedIn: true,
-  }, [await createSession(identity.value.uid)]);
-}
-
-
       if (request.method === 'POST' && ['/api/auth/register', '/api/auth/password'].includes(path)) {
         const body = await readJson(request);
         const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
