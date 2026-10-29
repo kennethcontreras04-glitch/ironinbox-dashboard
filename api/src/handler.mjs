@@ -280,8 +280,17 @@ if (request.method === 'POST' && path === '/api/auth/supabase/register') {
         : 'Account created. You can now sign in.',
     });
   } catch (error) {
-    throw fail(400, 'Unable to complete registration. Please check your details or try again later.');
-  }
+  console.error('Supabase registration error:', {
+    name: error?.name,
+    code: error?.code,
+    status: error?.status,
+  });
+
+  throw fail(
+    400,
+    `Registration failed [${error?.name || 'Unknown'}] [${error?.code || 'no-code'}]`
+  );
+}
 }
 
 if (request.method === 'POST' && path === '/api/auth/supabase/login') {
