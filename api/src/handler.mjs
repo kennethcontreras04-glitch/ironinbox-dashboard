@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
 import { checkSupabaseConnection } from './supabaseHealth.mjs';
+import { createSupabaseAuth } from './supabaseAuth.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -120,6 +121,7 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   const key = env.TOKEN_ENCRYPTION_KEY ? createHash('sha256').update(env.TOKEN_ENCRYPTION_KEY).digest() : null;
   const ready = Boolean(frontend && key && storage);
   const providers = createProviders(env, fetcher);
+  const supabaseAuth = createSupabaseAuth(env);
   const secure = !frontend?.startsWith('http://localhost:');
   const cookie = (name, value, maxAge) => ({ name, value, maxAge, path: '/', httpOnly: true, secure, sameSite: 'Lax' });
   const cookiesOf = request => Object.fromEntries((request.headers.get('cookie') || '').split(';').map(x => x.trim().split('=')));
@@ -236,6 +238,95 @@ export function createHandler({ env, storage, fetcher = fetch }) {
 }
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
       if (request.method === 'POST' && (request.headers.get('origin') !== frontend || !request.headers.get('content-type')?.startsWith('application/json'))) throw fail(403, 'Request origin or content type is not allowed.');
+      
+if (request.method === 'POST' &&
+    ['/api/auth/supabase/register', '/api/auth/supabase/login'].includes(path)) {
+
+  if (!supabaseAuth) {
+    throw fail(503, 'Supabase authentication is not configured.');
+  }
+
+  const body = await readJson(request);
+  const email = typeof body.email === 'string'
+    ? body.email.trim().toLowerCase()
+    : '';
+  const password = body.password;
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      typeof password !== 'string' ||
+      password.length < 12 ||
+      password.length > 128) {
+    throw fail(400, 'Enter a valid email and a password of 12–128 characters.');
+  }
+
+  await throttle(`supabase:${email}`);
+
+  if (path === '/api/auth/supabase/register') {
+    const firstName = typeof body.firstName === 'string'
+      ? body.firstName.trim().slice(0, 100)
+      : '';
+    const lastName = typeof body.lastName === 'string'
+      ? body.lastName.trim().slice(0, 100)
+      : '';
+
+    if (!firstName || !lastName) {
+      throw fail(400, 'First name and last name are required.');
+    }
+
+    try {
+      const result = await supabaseAuth.register(
+        email, password, firstName, lastName
+      );
+
+      return json(202, {
+        registered: true,
+        requiresConfirmation: result.requiresConfirmation,
+        message: 'Check your email to confirm your account.',
+      });
+    } catch (error) {
+      context.log?.('Supabase registration failed', {
+        name: error?.name,
+        code: error?.code,
+        status: error?.status,
+      });
+
+      throw fail(400, 'Unable to complete registration. Please try again.');
+    }
+  }
+
+  let profile;
+
+  try {
+    profile = await supabaseAuth.login(email, password);
+  } catch (error) {
+    context.log?.('Supabase login failed', {
+      name: error?.name,
+      code: error?.code,
+      status: error?.status,
+    });
+
+    throw fail(401, 'Unable to sign in. Check your credentials and verify your email.');
+  }
+
+  if (!profile?.userId) {
+    throw fail(502, 'Supabase did not return a valid user identity.');
+  }
+
+  const user = await identityUser('supabase', {
+    subject: profile.userId,
+    email: profile.email,
+    name: `${profile.firstName} ${profile.lastName}`.trim() || profile.email,
+  });
+
+  if (!user) {
+    throw fail(503, 'Unable to initialize the IronInbox account.');
+  }
+
+  return json(200, {
+    signedIn: true,
+  }, [await createSession(user.value.uid)]);
+}
+
       if (request.method === 'POST' && ['/api/auth/register', '/api/auth/password'].includes(path)) {
         const body = await readJson(request);
         const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
