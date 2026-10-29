@@ -211,7 +211,7 @@ export function createHandler({ env, storage, fetcher = fetch }) {
     return user ? { user, userKey, session, sessionKey } : null;
   }
   async function throttle(username) {
-    const rateKey = `login-attempts/${hash(username)}`;
+    const rateKey = `login-attempts-v2/${hash(username)}`;
     const record = await read(rateKey);
     const value = record && record.value.until > Date.now() ? record.value : { count: 0, until: Date.now() + 15 * 60_000 };
     if (value.count >= 10) throw fail(429, 'Too many attempts. Please try again in 15 minutes.');
