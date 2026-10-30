@@ -22,11 +22,27 @@ export function createSupabaseAuth(env) {
 async register(email, password, firstName, lastName) {
   let supabase;
 
-  try {
-    supabase = client();
-  } catch {
-    throw new Error('SUPABASE_CLIENT_INITIALIZATION_FAILED');
-  }
+  
+try {
+  supabase = client();
+} catch (error) {
+  const diagnostic = new Error('SUPABASE_CLIENT_INITIALIZATION_FAILED');
+
+  diagnostic.code =
+    error instanceof Error &&
+    /supabaseUrl is required/i.test(error.message)
+      ? 'MISSING_URL'
+      : error instanceof Error &&
+        /supabaseKey is required/i.test(error.message)
+        ? 'MISSING_KEY'
+        : error instanceof Error &&
+          /invalid supabaseUrl/i.test(error.message)
+          ? 'INVALID_URL'
+          : 'CLIENT_SETUP_ERROR';
+
+  throw diagnostic;
+}
+
 
   let result;
 
