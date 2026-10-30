@@ -2,10 +2,6 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt as sc
 import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
-import {
-  checkSupabaseConnection,
-  checkSupabaseClientInitialization,
-} from './supabaseHealth.mjs';
 import { createSupabaseAuth } from './supabaseAuth.mjs';
 
 const scrypt = promisify(scryptCallback);
@@ -231,18 +227,6 @@ export function createHandler({ env, storage, fetcher = fetch }) {
     try {
       if (request.method === 'GET' && path === '/api/health') return json(200, { configured: ready,
         providers: Object.fromEntries(Object.entries(providers).map(([name, provider]) => [name, provider.configured])) });
-        if (request.method === 'GET' && path === '/api/health/supabase') {
-  if (env.IRONINBOX_ENABLE_SUPABASE_DIAGNOSTICS !== 'true') {
-    throw fail(404, 'Not found.');
-  }
-
-  const result = await checkSupabaseConnection(env, fetcher);
-
-return json(result.connected ? 200 : 503, {
-  ...result,
-  sdk: checkSupabaseClientInitialization(env),
-});
-}
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
       
 if (request.method === 'POST') {
@@ -304,33 +288,19 @@ if (request.method === 'POST' &&
       );
 
       return json(202, {
-        registered: true,
-        requiresConfirmation: result.requiresConfirmation,
-        message: 'Check your email to confirm your account.',
-      });
+  registered: true,
+  requiresConfirmation: result.requiresConfirmation,
+  message: result.requiresConfirmation
+    ? 'Check your email to confirm your account.'
+    : 'Account created successfully. You can now sign in.',
+});
     
 } catch (error) {
-const diagnostic = {
-  name: String(error?.name || 'UnknownError'),
-  code: String(error?.code || 'unknown'),
-  status: Number.isInteger(error?.status) ? error.status : null,
-  stage: [
-    'SUPABASE_CLIENT_INITIALIZATION_FAILED',
-    'SUPABASE_SIGNUP_REQUEST_FAILED',
-  ].includes(error?.message)
-    ? error.message
-    : 'SUPABASE_AUTH_ERROR',
-};
-
-
-  context.log?.('Supabase registration failed', diagnostic);
-
-  if (env.IRONINBOX_ENABLE_SUPABASE_DIAGNOSTICS === 'true') {
-    return json(502, {
-      error: 'Supabase registration failed.',
-      diagnostic,
-    });
-  }
+  context.log?.('Supabase registration failed', {
+    name: String(error?.name || 'UnknownError'),
+    code: String(error?.code || 'unknown'),
+    status: Number.isInteger(error?.status) ? error.status : null,
+  });
 
   throw fail(400, 'Unable to complete registration. Please try again.');
 }
