@@ -237,7 +237,25 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   return json(result.connected ? 200 : 503, result);
 }
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
-      if (request.method === 'POST' && (request.headers.get('origin') !== frontend || !request.headers.get('content-type')?.startsWith('application/json'))) throw fail(403, 'Request origin or content type is not allowed.');
+      
+if (request.method === 'POST') {
+  const origin = request.headers.get('origin');
+  const contentType = request.headers.get('content-type');
+
+  const allowedOrigins = [
+  frontend,
+  ...(env.IRONINBOX_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean),
+].filter(Boolean);
+
+  if (!allowedOrigins.includes(origin) ||
+      !contentType?.startsWith('application/json')) {
+    throw fail(403, 'Request origin or content type is not allowed.');
+  }
+}
+
       
 if (request.method === 'POST' &&
     ['/api/auth/supabase/register', '/api/auth/supabase/login'].includes(path)) {
