@@ -17,10 +17,18 @@ export async function checkSupabaseConnection(env, fetcher = fetch) {
     );
 
     return {
-      configured: true,
-      connected: response.ok,
-      status: response.status,
-    };
+  configured: true,
+  connected: response.ok,
+  status: response.status,
+  urlFormatValid: /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(url),
+  urlHasWhitespace: url !== url.trim(),
+  keyHasWhitespace: key !== key.trim(),
+  keyFormat: key.startsWith('sb_publishable_')
+    ? 'publishable'
+    : key.startsWith('eyJ')
+      ? 'legacy-jwt'
+      : 'unrecognized',
+};
   } catch (error) {
     return {
       configured: true,
