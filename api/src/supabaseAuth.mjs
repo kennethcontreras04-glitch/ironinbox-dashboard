@@ -18,28 +18,44 @@ export function createSupabaseAuth(env) {
   }
 
   return {
-    async register(email, password, firstName, lastName) {
-      const supabase = client();
+    
+async register(email, password, firstName, lastName) {
+  let supabase;
 
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            first_name: firstName,
-            last_name: lastName,
-            full_name: `${firstName} ${lastName}`.trim(),
-          },
+  try {
+    supabase = client();
+  } catch {
+    throw new Error('SUPABASE_CLIENT_INITIALIZATION_FAILED');
+  }
+
+  let result;
+
+  try {
+    result = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          first_name: firstName,
+          last_name: lastName,
+          full_name: `${firstName} ${lastName}`.trim(),
         },
-      });
+      },
+    });
+  } catch {
+    throw new Error('SUPABASE_SIGNUP_REQUEST_FAILED');
+  }
 
-      if (error) throw error;
+  const { data, error } = result;
 
-      return {
-        userId: data.user?.id,
-        requiresConfirmation: !data.session,
-      };
-    },
+  if (error) throw error;
+
+  return {
+    userId: data.user?.id,
+    requiresConfirmation: !data.session,
+  };
+},
+
 
     async login(email, password) {
       const supabase = client();

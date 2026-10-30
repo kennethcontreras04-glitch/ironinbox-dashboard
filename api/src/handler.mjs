@@ -303,11 +303,18 @@ if (request.method === 'POST' &&
       });
     
 } catch (error) {
-  const diagnostic = {
-    name: String(error?.name || 'UnknownError'),
-    code: String(error?.code || 'unknown'),
-    status: Number.isInteger(error?.status) ? error.status : null,
-  };
+const diagnostic = {
+  name: String(error?.name || 'UnknownError'),
+  code: String(error?.code || 'unknown'),
+  status: Number.isInteger(error?.status) ? error.status : null,
+  stage: [
+    'SUPABASE_CLIENT_INITIALIZATION_FAILED',
+    'SUPABASE_SIGNUP_REQUEST_FAILED',
+  ].includes(error?.message)
+    ? error.message
+    : 'SUPABASE_AUTH_ERROR',
+};
+
 
   context.log?.('Supabase registration failed', diagnostic);
 
