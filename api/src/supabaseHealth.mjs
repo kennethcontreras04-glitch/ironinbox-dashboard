@@ -57,20 +57,29 @@ export function checkSupabaseClientInitialization(env) {
     return {
       initialized: Boolean(client.auth),
     };
-  } catch (error) {
-    const message = String(error?.message || '');
+  
+} catch (error) {
+  const message = String(error?.message || '');
 
-    return {
-      initialized: false,
-      errorName: String(error?.name || 'UnknownError'),
-      errorCategory: /fetch/i.test(message)
-        ? 'FETCH_SETUP'
-        : /storage/i.test(message)
-          ? 'STORAGE_SETUP'
-          : /url|key/i.test(message)
-            ? 'CONFIGURATION'
-            : 'OTHER',
-    };
-  }
+  const knownErrors = [
+    'supabaseUrl is required.',
+    'supabaseKey is required.',
+    'Invalid supabaseUrl',
+    'Invalid API key',
+  ];
+
+  return {
+    initialized: false,
+    errorName: String(error?.name || 'UnknownError'),
+    errorMessage: knownErrors.some(text => message.includes(text))
+      ? message.slice(0, 120)
+      : 'UNCLASSIFIED_SDK_INITIALIZATION_ERROR',
+    runtime: process.version,
+    hasGlobalFetch: typeof globalThis.fetch === 'function',
+    hasGlobalHeaders: typeof globalThis.Headers === 'function',
+    hasGlobalStorage: typeof globalThis.localStorage !== 'undefined',
+  };
+}
+
 }
 
