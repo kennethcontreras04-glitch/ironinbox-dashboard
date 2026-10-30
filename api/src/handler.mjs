@@ -301,15 +301,26 @@ if (request.method === 'POST' &&
         requiresConfirmation: result.requiresConfirmation,
         message: 'Check your email to confirm your account.',
       });
-    } catch (error) {
-      context.log?.('Supabase registration failed', {
-        name: error?.name,
-        code: error?.code,
-        status: error?.status,
-      });
+    
+} catch (error) {
+  const diagnostic = {
+    name: String(error?.name || 'UnknownError'),
+    code: String(error?.code || 'unknown'),
+    status: Number.isInteger(error?.status) ? error.status : null,
+  };
 
-      throw fail(400, 'Unable to complete registration. Please try again.');
-    }
+  context.log?.('Supabase registration failed', diagnostic);
+
+  if (env.IRONINBOX_ENABLE_SUPABASE_DIAGNOSTICS === 'true') {
+    return json(502, {
+      error: 'Supabase registration failed.',
+      diagnostic,
+    });
+  }
+
+  throw fail(400, 'Unable to complete registration. Please try again.');
+}
+
   }
 
   let profile;
