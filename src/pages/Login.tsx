@@ -5,12 +5,16 @@ import { RiGoogleFill, RiMicrosoftFill } from 'react-icons/ri';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { beginGmailSignIn, beginMicrosoftSignIn, passwordSignIn, user } = useAuth();
+  const {beginGmailSignIn, beginMicrosoftSignIn, passwordSignIn, supabaseSignIn, supabaseRegister, user,} = useAuth();
   const [error, setError] = useState(() => new URLSearchParams(window.location.search).get('auth') === 'error' ? 'Sign-in failed or expired. Please try again.' : '');
   const [busy, setBusy] = useState(false);
   const [register, setRegister] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [authMode, setAuthMode] = useState<'supabase' | 'legacy'>('supabase');
+  const [success, setSuccess] = useState('');
   const [providers, setProviders] = useState({ gmail: false, outlook: false });
   useEffect(() => {
     void fetch('/api/health').then(response => response.json()).then(data => setProviders(data.providers || { gmail: false, outlook: false })).catch(() => {});
@@ -18,12 +22,42 @@ const Login: React.FC = () => {
   useEffect(() => {
     if (user) navigate('/account', { replace: true });
   }, [user, navigate]);
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault(); setBusy(true); setError('');
-    try { await passwordSignIn(username, password, register); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed.'); }
-    finally { setBusy(false); setPassword(''); }
-  };
+  
+const submit = async (event: React.FormEvent) => {
+  event.preventDefault();
+  setBusy(true);
+  setError('');
+  setSuccess('');
+
+  try {
+    if (authMode === 'legacy') {
+      await passwordSignIn(username, password, register);
+    } else if (register) {
+      const result = await supabaseRegister(
+        username,
+        password,
+        firstName,
+        lastName
+      );
+
+      if (result.requiresConfirmation) {
+        setSuccess('Account created! Check your email to confirm your account before signing in.');
+      } else {
+        setSuccess('Account created successfully! You can now sign in.');
+      }
+
+      setRegister(false);
+    } else {
+      await supabaseSignIn(username, password);
+    }
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Authentication failed.');
+  } finally {
+    setBusy(false);
+    setPassword('');
+  }
+};
+
   const button = 'w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg border border-slate-200 text-sm font-medium disabled:opacity-50 dark:border-[var(--dm-border)]';
   const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 bg-transparent dark:border-[var(--dm-border)]';
   return (
@@ -93,14 +127,120 @@ const Login: React.FC = () => {
 
           <button className={button + ' mt-3'} disabled={busy || !providers.outlook} onClick={beginMicrosoftSignIn}><RiMicrosoftFill /> Continue with Microsoft</button>
           {!providers.outlook && <p className="text-xs text-slate-500 mt-2">Microsoft connection requires administrator setup.</p>}
-          <form onSubmit={submit} className="space-y-3 border-t border-slate-200 mt-5 pt-4 dark:border-[var(--dm-border)] dark:text-[var(--dm-text-primary)]">
-            <h2 className="text-sm font-semibold">{register ? 'Create an account' : 'Sign in with username and password'}</h2>
-            <label className="block text-sm">Username<input className={input} autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} required minLength={3} maxLength={64} pattern="[a-zA-Z0-9._\-]+" /></label>
-            <label className="block text-sm">Password<input className={input} type="password" autoComplete={register ? 'new-password' : 'current-password'} value={password} onChange={event => setPassword(event.target.value)} required minLength={12} maxLength={128} /></label>
-            {register && <p className="text-xs text-slate-500">Use at least 12 characters. Keep your password safe; password recovery is not available yet.</p>}
-            <button className={button + ' bg-blue-600 text-white'} disabled={busy}>{busy ? 'Please wait…' : register ? 'Create account' : 'Sign in'}</button>
-          </form>
-          <button className="text-sm text-blue-600 my-4" onClick={() => { setRegister(!register); setError(''); }}>{register ? 'Already have an account? Sign in' : 'Create an account with username and password'}</button>
+          
+<div className="border-t border-slate-200 mt-5 pt-4 dark:border-[var(--dm-border)]">
+  <div className="flex gap-2 mb-4">
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => {
+        setAuthMode('supabase');
+        setRegister(false);
+        setError('');
+        setSuccess('');
+        setUsername('');
+        setPassword('');
+      }}
+      className={`${button} ${authMode === 'supabase' ? 'bg-blue-600 text-white' : ''}`}
+    >
+      Email
+    </button>
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => {
+        setAuthMode('legacy');
+        setRegister(false);
+        setError('');
+        setSuccess('');
+        setUsername('');
+        setPassword('');
+      }}
+      className={`${button} ${authMode === 'legacy' ? 'bg-blue-600 text-white' : ''}`}
+    >
+      Username
+    </button>
+  </div>
+
+  <form onSubmit={submit} className="space-y-3 dark:text-[var(--dm-text-primary)]">
+    <h2 className="text-sm font-semibold">
+      {register ? 'Create an account' : authMode === 'supabase' ? 'Sign in with email and password' : 'Sign in with username and password'}
+    </h2>
+
+    {authMode === 'supabase' && register && (
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block text-sm">
+          First name
+          <input className={input} value={firstName} onChange={event => setFirstName(event.target.value)} required maxLength={100} autoComplete="given-name" />
+        </label>
+        <label className="block text-sm">
+          Last name
+          <input className={input} value={lastName} onChange={event => setLastName(event.target.value)} required maxLength={100} autoComplete="family-name" />
+        </label>
+      </div>
+    )}
+
+    <label className="block text-sm">
+      {authMode === 'supabase' ? 'Email' : 'Username'}
+      <input
+        className={input}
+        type={authMode === 'supabase' ? 'email' : 'text'}
+        autoComplete={authMode === 'supabase' ? 'email' : 'username'}
+        value={username}
+        onChange={event => setUsername(event.target.value)}
+        required
+        minLength={authMode === 'legacy' ? 3 : undefined}
+        maxLength={authMode === 'legacy' ? 64 : 254}
+        pattern={authMode === 'legacy' ? '[a-zA-Z0-9._-]+' : undefined}
+      />
+    </label>
+
+    <label className="block text-sm">
+      Password
+      <input
+        className={input}
+        type="password"
+        autoComplete={register ? 'new-password' : 'current-password'}
+        value={password}
+        onChange={event => setPassword(event.target.value)}
+        required
+        minLength={12}
+        maxLength={128}
+      />
+    </label>
+
+    {register && (
+      <p className="text-xs text-slate-500">
+        Use at least 12 characters. Keep your password safe.
+      </p>
+    )}
+
+    <button className={button + ' bg-blue-600 text-white'} disabled={busy}>
+      {busy ? 'Please wait…' : register ? 'Create account' : 'Sign in'}
+    </button>
+  </form>
+
+  <button
+    type="button"
+    className="text-sm text-blue-600 my-4"
+    disabled={busy}
+    onClick={() => {
+      setRegister(!register);
+      setError('');
+      setSuccess('');
+      setPassword('');
+    }}
+  >
+    {register ? 'Already have an account? Sign in' : 'Create an account'}
+  </button>
+</div>
+
+{success && (
+  <div className="mb-4 px-3 py-2.5 rounded-lg text-xs bg-green-50 border border-green-200 text-green-700 dark:bg-green-950/30 dark:border-green-900/50 dark:text-green-400">
+    {success}
+  </div>
+)}
+
 
           {/* Error */}
           {error && (
