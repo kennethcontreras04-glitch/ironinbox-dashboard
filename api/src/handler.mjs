@@ -2,7 +2,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt as sc
 import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
-import { checkSupabaseConnection } from './supabaseHealth.mjs';
+import {
+  checkSupabaseConnection,
+  checkSupabaseClientInitialization,
+} from './supabaseHealth.mjs';
 import { createSupabaseAuth } from './supabaseAuth.mjs';
 
 const scrypt = promisify(scryptCallback);
@@ -234,7 +237,11 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   }
 
   const result = await checkSupabaseConnection(env, fetcher);
-  return json(result.connected ? 200 : 503, result);
+
+return json(result.connected ? 200 : 503, {
+  ...result,
+  sdk: checkSupabaseClientInitialization(env),
+});
 }
       if (!ready) throw fail(503, 'The API is not configured. Ask the administrator to complete Azure setup.');
       

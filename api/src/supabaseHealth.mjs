@@ -1,3 +1,4 @@
+import { createClient } from '@supabase/supabase-js';
 
 export async function checkSupabaseConnection(env, fetcher = fetch) {
   const url = env.SUPABASE_URL;
@@ -36,4 +37,40 @@ export async function checkSupabaseConnection(env, fetcher = fetch) {
       errorType: error?.name || 'UnknownError',
     };
   }
+  
 }
+
+export function checkSupabaseClientInitialization(env) {
+  try {
+    const client = createClient(
+      env.SUPABASE_URL,
+      env.SUPABASE_PUBLISHABLE_KEY,
+      {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+          detectSessionInUrl: false,
+        },
+      }
+    );
+
+    return {
+      initialized: Boolean(client.auth),
+    };
+  } catch (error) {
+    const message = String(error?.message || '');
+
+    return {
+      initialized: false,
+      errorName: String(error?.name || 'UnknownError'),
+      errorCategory: /fetch/i.test(message)
+        ? 'FETCH_SETUP'
+        : /storage/i.test(message)
+          ? 'STORAGE_SETUP'
+          : /url|key/i.test(message)
+            ? 'CONFIGURATION'
+            : 'OTHER',
+    };
+  }
+}
+
