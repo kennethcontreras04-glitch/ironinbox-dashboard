@@ -108,6 +108,51 @@ export type DetectionSettings = {
   riskThreshold: number;
 }
 
+export type SuspicionReason =
+  | 'unexpected-request'
+  | 'urgent-tone'
+  | 'unknown-sender'
+  | 'strange-link'
+  | 'other';
+
+export type YesNoUnsure = 'yes' | 'no' | 'unsure';
+
+export type SensitiveKind = 'password' | 'code' | 'ssn' | 'bank' | 'gift-card';
+
+export type UnusualSign = 'popups' | 'unexpected-codes' | 'locked-account' | 'slow-computer';
+
+export type ReportDevice = 'work-computer' | 'phone' | 'home-computer' | 'unsure';
+
+export type ClaimedWho = 'manager' | 'executive' | 'vendor' | 'it' | 'coworker' | 'other';
+
+export type IncidentResponse = {
+  suspicion?: SuspicionReason;
+  askedSensitive?: YesNoUnsure;
+  sensitiveKinds?: SensitiveKind[];
+  sensitiveDetailAnswered?: boolean;
+  clickedLink?: boolean;
+  openedAttachment?: boolean;
+  replied?: boolean;
+  interactionAnswered?: boolean;
+  typedSecret?: YesNoUnsure;
+  sentMoneyOrFiles?: YesNoUnsure;
+  claimedIdentity?: YesNoUnsure;
+  claimedWho?: ClaimedWho;
+  unusualSince?: YesNoUnsure;
+  unusualSigns?: UnusualSign[];
+  unusualDetailAnswered?: boolean;
+  device?: ReportDevice;
+  happenedAround?: string;
+  othersReceived?: YesNoUnsure;
+  note?: string;
+  screenshotName?: string;
+  senderAddress?: string;
+  senderBlocked?: boolean;
+  companyBlockRequested?: boolean;
+  removeEverywhereRequested?: boolean;
+  actionsChecked?: string[];
+}
+
 export type IncidentEmailSnapshot = {
   id: string;
   sender: string;
@@ -141,6 +186,8 @@ export type Incident = {
   source?: string;
   sourceEmailId?: string;
   sourceEmail?: IncidentEmailSnapshot;
+  response?: IncidentResponse;
+  reviewReason?: string;
 }
 
 export type NotificationType =
