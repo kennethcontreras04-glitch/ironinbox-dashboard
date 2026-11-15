@@ -330,3 +330,103 @@ test('existing Gmail workspace migrates to the internal user with mailbox-scoped
   await s.request('/api/data/wipe', 'POST', cookie);
   assert.equal(s.records.has(`workspaces/${hash('google-user')}`), false);
 });
+
+test('Supabase login creates a persistent IronInbox session', async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      access_token: 'mock-access-token',
+      token_type: 'bearer',
+      expires_in: 3600,
+      refresh_token: 'mock-refresh-token',
+      user: {
+        id: 'supabase-test-user-123',
+        email: 'student@example.com',
+        user_metadata: {
+          first_name: 'Test',
+          last_name: 'Student',
+        },
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const s = setup({
+      SUPABASE_URL: 'https://example.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    });
+
+    const credentials = {
+      email: 'student@example.com',
+      password: 'SecurePassword123!',
+    };
+
+    const firstLogin = await s.request(
+      '/api/auth/supabase/login',
+      'POST',
+      '',
+      credentials
+    );
+
+    assert.equal(firstLogin.status, 200);
+    assert.equal(firstLogin.jsonBody.signedIn, true);
+
+    const sessionCookie = firstLogin.cookies.find(
+      item => item.name === 'ironinbox_session'
+    );
+
+    assert.ok(sessionCookie);
+
+    const cookie = `ironinbox_session=${sessionCookie.value}`;
+
+    const firstStatus = await s.request(
+      '/api/auth/status',
+      'GET',
+      cookie
+    );
+
+    assert.equal(firstStatus.status, 200);
+    assert.equal(firstStatus.jsonBody.connected, true);
+    assert.equal(firstStatus.jsonBody.loginProvider, 'supabase');
+    assert.equal(firstStatus.jsonBody.email, 'student@example.com');
+
+    const uid = firstStatus.jsonBody.uid;
+
+    const logout = await s.request(
+      '/api/auth/logout',
+      'POST',
+      cookie
+    );
+
+    assert.equal(logout.status, 200);
+
+    const secondLogin = await s.request(
+      '/api/auth/supabase/login',
+      'POST',
+      '',
+      credentials
+    );
+
+    assert.equal(secondLogin.status, 200);
+
+    const secondCookie = secondLogin.cookies.find(
+      item => item.name === 'ironinbox_session'
+    );
+
+    assert.ok(secondCookie);
+
+    const secondStatus = await s.request(
+      '/api/auth/status',
+      'GET',
+      `ironinbox_session=${secondCookie.value}`
+    );
+
+    assert.equal(secondStatus.jsonBody.uid, uid);
+    assert.equal(secondStatus.jsonBody.loginProvider, 'supabase');
+
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

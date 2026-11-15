@@ -3,9 +3,19 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { User, Calendar, AlertTriangle, Clock, CheckCircle, Layers } from 'lucide-react';
 import Header from '../components/layout/Header';
+import IncidentResponseBlock from '../components/incidents/IncidentResponseBlock';
 import { useApp } from '../contexts/useApp';
-import type { Incident } from '../types';
+import { useAuth } from '../contexts/useAuth';
+import type { Incident, IncidentResponse } from '../types';
 import { createIncidentId } from '../utils/incidents';
+import { useRole } from '../utils/useRole';
+import {
+  applyGuidanceToIncident,
+  assessIncident,
+  isDefaultAssignee,
+  looksLikeSecret,
+  mergeResponse,
+} from '../utils/incidentGuidance';
 
 const INCIDENT_PAGE_SIZE = 5;
 
@@ -24,8 +34,12 @@ const EMPTY_INCIDENT: Omit<Incident, 'id' | 'createdTime'> = {
 const PRIORITIES = ['All', 'Critical', 'High', 'Medium', 'Low'] as const;
 const STATUSES = ['All', 'Open', 'In Progress', 'Resolved'] as const;
 
+const PRIORITY_RANK: Record<Incident['priority'], number> = { Low: 0, Medium: 1, High: 2, Critical: 3 };
+
 const Incidents: React.FC = () => {
   const { incidents, flaggedEmails, releasedEmails, isWiped, upsertIncident, createManualIncident } = useApp();
+  const { user } = useAuth();
+  const { role } = useRole();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const filterRef = useRef<HTMLDivElement>(null);
@@ -33,6 +47,14 @@ const Incidents: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [draftIncident, setDraftIncident] = useState<Incident | null>(null);
+  const [manualPriority, setManualPriority] = useState<Incident['priority'] | null>(null);
+  const [assigneeTouched, setAssigneeTouched] = useState(false);
+  const [subjectTouched, setSubjectTouched] = useState(false);
+  const [descriptionTouched, setDescriptionTouched] = useState(false);
+  const [categoryTouched, setCategoryTouched] = useState(false);
+  const [reviewBaseline, setReviewBaseline] = useState<{ priority: Incident['priority']; status: Incident['status'] } | null>(null);
+  const [openedAssignee, setOpenedAssignee] = useState<string | undefined>(undefined);
+  const [reasonRejected, setReasonRejected] = useState(false);
   const [requestedPage, setIncidentPage] = useState(1);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterPriority, setFilterPriority] = useState<string>('All');
@@ -48,16 +70,37 @@ const Incidents: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
+  const resetComposer = () => {
+    setManualPriority(null);
+    setAssigneeTouched(false);
+    setSubjectTouched(false);
+    setDescriptionTouched(false);
+    setCategoryTouched(false);
+    setReviewBaseline(null);
+    setOpenedAssignee(undefined);
+    setReasonRejected(false);
+  };
+
   const openIncidentModal = (incident: Incident) => {
     setIsCreating(false);
-    setDraftIncident(incident);
+    resetComposer();
+    setReviewBaseline({ priority: incident.priority, status: incident.status });
+    setOpenedAssignee(incident.assignedTo);
+    setDraftIncident(incident.response ? { ...incident, response: mergeResponse(incident.response, {}) } : incident);
     setIsModalOpen(true);
   };
 
   const openCreateIncidentModal = () => {
     const nextId = createIncidentId(incidents.map((item) => item.id));
     setIsCreating(true);
-    setDraftIncident({ ...EMPTY_INCIDENT, id: nextId, createdTime: 'Just now' });
+    resetComposer();
+    setDraftIncident({
+      ...EMPTY_INCIDENT,
+      reporter: user?.email || 'Current User',
+      source: 'Employee report',
+      id: nextId,
+      createdTime: 'Just now',
+    });
     setIsModalOpen(true);
   };
 
@@ -65,6 +108,59 @@ const Incidents: React.FC = () => {
     setDraftIncident(null);
     setIsModalOpen(false);
     setIsCreating(false);
+    resetComposer();
+  };
+
+  const updateResponse = (patch: Partial<IncidentResponse>) => {
+    setDraftIncident((current) => {
+      if (!current) return current;
+      let response = mergeResponse(current.response, patch);
+      if ('clickedLink' in patch || 'openedAttachment' in patch || 'replied' in patch) {
+        const allChosen = [response.clickedLink, response.openedAttachment, response.replied].every((flag) => typeof flag === 'boolean');
+        response = mergeResponse(response, { interactionAnswered: allChosen });
+      }
+      return applyGuidanceToIncident(current, response, assessIncident(response, current.sourceEmail), {
+        creating: isCreating,
+        manualPriority,
+        openedPriority: reviewBaseline?.priority ?? current.priority,
+        assigneeTouched,
+        allowDowngrade: role === 'admin' || role === 'manager',
+        subjectTouched,
+        descriptionTouched,
+        categoryTouched,
+      });
+    });
+  };
+
+  const viewerLockedPriority = (priority: Incident['priority']) => (
+    !isCreating
+    && reviewBaseline?.priority === 'Critical'
+    && role === 'viewer'
+    && PRIORITY_RANK[priority] < PRIORITY_RANK.Critical
+  );
+
+  const viewerLockedResolve = Boolean(
+    !isCreating
+    && reviewBaseline?.priority === 'Critical'
+    && reviewBaseline.status !== 'Resolved'
+    && role === 'viewer'
+  );
+
+  const choosePriority = (priority: Incident['priority']) => {
+    if (!draftIncident || viewerLockedPriority(priority)) return;
+    const guidance = assessIncident(draftIncident.response, draftIncident.sourceEmail);
+    const next = applyGuidanceToIncident(draftIncident, draftIncident.response ?? {}, guidance, {
+      creating: isCreating,
+      manualPriority: priority,
+      openedPriority: reviewBaseline?.priority ?? draftIncident.priority,
+      assigneeTouched,
+      allowDowngrade: role === 'admin' || role === 'manager',
+      subjectTouched,
+      descriptionTouched,
+      categoryTouched,
+    });
+    setManualPriority(next.priority === priority ? priority : null);
+    setDraftIncident(next);
   };
 
   const handleSaveIncident = () => {
@@ -112,6 +208,18 @@ const Incidents: React.FC = () => {
   const countCritical = baseIncidents.filter((i) => i.priority === 'Critical').length;
 
   const hasActiveFilter = filterPriority !== 'All' || filterStatus !== 'All';
+  const canReview = role === 'admin' || role === 'manager';
+  const needsReview = Boolean(
+    draftIncident
+    && reviewBaseline
+    && reviewBaseline.priority === 'Critical'
+    && (
+      draftIncident.priority !== 'Critical'
+      || (reviewBaseline.status !== 'Resolved' && draftIncident.status === 'Resolved')
+    )
+  );
+  const reviewReasonRejected = Boolean(draftIncident?.reviewReason && looksLikeSecret(draftIncident.reviewReason));
+  const reviewBlocked = needsReview && (!canReview || !draftIncident?.reviewReason?.trim() || reviewReasonRejected);
 
   return (
     <>
@@ -126,7 +234,7 @@ const Incidents: React.FC = () => {
             <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
-            Create Incident
+            Report suspicious email
           </button>
         }
       />
@@ -427,13 +535,13 @@ const Incidents: React.FC = () => {
       {/* Incident detail / create modal */}
       {!isWiped && isModalOpen && draftIncident && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 dark:bg-black/60">
-          <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl dark:bg-[var(--dm-surface-card)] dark:border-[var(--dm-border)]">
+          <div className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-2xl dark:bg-[var(--dm-surface-card)] dark:border-[var(--dm-border)]">
 
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-[var(--dm-border)]">
               <div>
                 <p className="text-xs font-semibold text-blue-600 dark:text-blue-400 font-mono">{draftIncident.id}</p>
                 <p className="text-sm font-semibold text-slate-800 dark:text-[var(--dm-text-primary)] mt-0.5">
-                  {isCreating ? 'New Incident' : 'Edit Incident'}
+                  {isCreating ? 'Report a suspicious email' : 'Incident'}
                 </p>
               </div>
               <button
@@ -445,12 +553,28 @@ const Incidents: React.FC = () => {
             </div>
 
             <div className="max-h-[72vh] overflow-y-auto px-6 py-5 space-y-4">
+              <IncidentResponseBlock
+                incident={draftIncident}
+                assignmentLocked={assigneeTouched || (!isCreating && !isDefaultAssignee(openedAssignee))}
+                onChange={updateResponse}
+              />
+
+              <div className="pt-1">
+                <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Case details</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">
+                  Filled in from the answers above. An analyst can still change them.
+                </p>
+              </div>
+
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Subject</label>
                 <input
                   type="text"
                   value={draftIncident.subject}
-                  onChange={(e) => setDraftIncident({ ...draftIncident, subject: e.target.value })}
+                  onChange={(e) => {
+                    setSubjectTouched(true);
+                    setDraftIncident({ ...draftIncident, subject: e.target.value });
+                  }}
                   placeholder="Describe the incident..."
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-primary)] dark:placeholder-[var(--dm-text-muted)]"
                 />
@@ -461,7 +585,10 @@ const Incidents: React.FC = () => {
                 <textarea
                   rows={3}
                   value={draftIncident.description}
-                  onChange={(e) => setDraftIncident({ ...draftIncident, description: e.target.value })}
+                  onChange={(e) => {
+                    setDescriptionTouched(true);
+                    setDraftIncident({ ...draftIncident, description: e.target.value });
+                  }}
                   placeholder="Provide detailed information about the incident..."
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 resize-none dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:placeholder-[var(--dm-text-muted)]"
                 />
@@ -493,41 +620,89 @@ const Incidents: React.FC = () => {
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Priority</label>
                 <div className="mt-1.5 grid grid-cols-4 gap-2">
-                  {(['Critical', 'High', 'Medium', 'Low'] as Incident['priority'][]).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setDraftIncident({ ...draftIncident, priority: p })}
-                      className={clsx(
-                        'rounded-lg border px-3 py-2 text-xs font-semibold transition',
-                        draftIncident.priority === p
-                          ? 'border-blue-500 bg-blue-600 text-white'
-                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-surface-card)]'
-                      )}
-                    >
-                      {p}
-                    </button>
-                  ))}
+                  {(['Critical', 'High', 'Medium', 'Low'] as Incident['priority'][]).map((p) => {
+                    const locked = viewerLockedPriority(p);
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        disabled={locked}
+                        title={locked ? 'A manager or admin has to lower a critical report and record a reason.' : undefined}
+                        onClick={() => choosePriority(p)}
+                        className={clsx(
+                          'rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40',
+                          draftIncident.priority === p
+                            ? 'border-blue-500 bg-blue-600 text-white'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-surface-card)]'
+                        )}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
                 </div>
+                {draftIncident.reviewReason && !needsReview && (
+                  <p className="mt-2 text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">
+                    Recorded reason: {draftIncident.reviewReason}
+                  </p>
+                )}
+                {reviewBaseline?.priority === 'Critical' && role === 'viewer' && (
+                  <p className="mt-2 text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">
+                    A manager or admin has to lower a critical report or close it, and they record a reason.
+                  </p>
+                )}
               </div>
 
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Status</label>
                 <div className="mt-1.5 grid grid-cols-3 gap-2">
-                  {(['Open', 'In Progress', 'Resolved'] as Incident['status'][]).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setDraftIncident({ ...draftIncident, status: s })}
-                      className={clsx(
-                        'rounded-lg border px-3 py-2 text-xs font-semibold transition',
-                        draftIncident.status === s
-                          ? 'border-blue-500 bg-blue-600 text-white'
-                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-surface-card)]'
-                      )}
-                    >
-                      {s}
-                    </button>
-                  ))}
+                  {(['Open', 'In Progress', 'Resolved'] as Incident['status'][]).map((s) => {
+                    const locked = s === 'Resolved' && viewerLockedResolve;
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        disabled={locked}
+                        title={locked ? 'A manager or admin has to close a critical report and record a reason.' : undefined}
+                        onClick={() => setDraftIncident({ ...draftIncident, status: s })}
+                        className={clsx(
+                          'rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40',
+                          draftIncident.status === s
+                            ? 'border-blue-500 bg-blue-600 text-white'
+                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-[var(--dm-surface-card)]'
+                        )}
+                      >
+                        {s}
+                      </button>
+                    );
+                  })}
                 </div>
+                {needsReview && canReview && (
+                  <div className="mt-3">
+                    <label htmlFor="review-reason" className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">
+                      Reason for this change
+                    </label>
+                    <textarea
+                      id="review-reason"
+                      rows={2}
+                      autoComplete="off"
+                      value={draftIncident.reviewReason || ''}
+                      onChange={(e) => {
+                        if (looksLikeSecret(e.target.value)) {
+                          setReasonRejected(true);
+                          return;
+                        }
+                        setReasonRejected(false);
+                        setDraftIncident({ ...draftIncident, reviewReason: e.target.value });
+                      }}
+                      placeholder="Why this critical report is being lowered or closed."
+                      className="mt-1.5 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-700 outline-none focus:border-blue-400 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)] dark:placeholder-[var(--dm-text-muted)]"
+                    />
+                    {reasonRejected && (
+                      <p className="mt-1 text-xs text-red-600 dark:text-red-300">Don’t put a password, code, or account number in the reason.</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -541,7 +716,11 @@ const Incidents: React.FC = () => {
                     <input
                       type="text"
                       value={value}
-                      onChange={(e) => setDraftIncident({ ...draftIncident, [key]: e.target.value })}
+                      onChange={(e) => {
+                        if (key === 'assignedTo') setAssigneeTouched(true);
+                        if (key === 'category') setCategoryTouched(true);
+                        setDraftIncident({ ...draftIncident, [key]: e.target.value });
+                      }}
                       className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-400 dark:border-[var(--dm-border)] dark:bg-[var(--dm-chrome)] dark:text-[var(--dm-text-secondary)]"
                     />
                   </div>
@@ -560,6 +739,9 @@ const Incidents: React.FC = () => {
                         {draftIncident.sourceEmail.auth && (
                           <> · SPF {draftIncident.sourceEmail.auth.spf || 'n/a'} · DKIM {draftIncident.sourceEmail.auth.dkim || 'n/a'} · DMARC {draftIncident.sourceEmail.auth.dmarc || 'n/a'}</>
                         )}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500 dark:text-[var(--dm-text-muted)]">
+                        Links are shown as text so they can’t be clicked. Attachments are listed and not opened.
                       </p>
                       {draftIncident.sourceEmail.signals?.length > 0 && (
                         <p className="mt-2 text-[11px] text-slate-500 dark:text-[var(--dm-text-muted)]">
@@ -614,10 +796,10 @@ const Incidents: React.FC = () => {
               </button>
               <button
                 onClick={handleSaveIncident}
-                disabled={!draftIncident.subject.trim()}
+                disabled={!draftIncident.subject.trim() || reviewBlocked}
                 className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-700 dark:hover:bg-blue-800"
               >
-                {isCreating ? 'Create Incident' : 'Save Changes'}
+                {isCreating ? 'Submit report' : 'Save Changes'}
               </button>
             </div>
           </div>
