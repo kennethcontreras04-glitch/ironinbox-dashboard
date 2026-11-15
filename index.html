@@ -1,19 +1,8 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <script>
-      (function () {
-        try {
-          if (localStorage.getItem('theme') === 'dark') {
-            document.documentElement.classList.add('dark');
-          } else {
-            document.documentElement.classList.remove('dark');
-            localStorage.setItem('theme', 'light');
-          }
-        } catch (e) {}
-      })();
-    </script>    
     <meta charset="UTF-8" />
+    <script src="/theme-init.js"></script>
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IronInbox Dashboard</title>
