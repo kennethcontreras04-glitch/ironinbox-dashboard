@@ -1,42 +1,67 @@
 export const SCHEMA_VERSION = 1;
 
+// Brands phishers most often impersonate (APWG / vendor brand-phishing reports),
+// with the legitimate domains each one really sends from, so their own
+// infrastructure (Google Groups, SharePoint, AWS mail...) is not mistaken for a lookalike.
 const BRANDS = {
-  paypal: ['paypal.com'],
-  microsoft: ['microsoft.com', 'microsoftonline.com', 'office.com', 'outlook.com', 'live.com'],
-  google: ['google.com', 'googlemail.com', 'gmail.com', 'youtube.com'],
-  amazon: ['amazon.com', 'amazon.co.uk', 'amazon.ca'],
-  apple: ['apple.com', 'icloud.com'],
-  facebook: ['facebook.com', 'facebookmail.com', 'meta.com'],
+  paypal: ['paypal.com', 'paypal.me'],
+  microsoft: ['microsoft.com', 'microsoftonline.com', 'office.com', 'office365.com', 'microsoft365.com', 'outlook.com', 'live.com', 'hotmail.com', 'msn.com', 'sharepoint.com', 'onmicrosoft.com', 'azure.com', 'skype.com'],
+  google: ['google.com', 'googlemail.com', 'gmail.com', 'youtube.com', 'googlegroups.com', 'googleusercontent.com', 'googleapis.com', 'withgoogle.com'],
+  amazon: ['amazon.com', 'amazon.co.uk', 'amazon.ca', 'amazon.de', 'amazonaws.com', 'amazonses.com', 'aws.com'],
+  apple: ['apple.com', 'icloud.com', 'me.com'],
+  facebook: ['facebook.com', 'facebookmail.com', 'meta.com', 'fb.com'],
   instagram: ['instagram.com'],
-  netflix: ['netflix.com'],
-  linkedin: ['linkedin.com'],
-  wellsfargo: ['wellsfargo.com'],
-  chase: ['chase.com'],
+  whatsapp: ['whatsapp.com'],
+  netflix: ['netflix.com', 'netflix.net'],
+  linkedin: ['linkedin.com', 'licdn.com'],
+  wellsfargo: ['wellsfargo.com', 'wellsfargoadvisors.com', 'wf.com'],
+  chase: ['chase.com', 'jpmorganchase.com'],
+  dhl: ['dhl.com', 'dhl.de'],
+  fedex: ['fedex.com'],
+  usps: ['usps.com'],
+  docusign: ['docusign.com', 'docusign.net'],
+  dropbox: ['dropbox.com', 'dropboxmail.com'],
+  adobe: ['adobe.com'],
 };
+
+// Personal webmail. Anyone can register these, so they never earn brand trust,
+// and a request for money or credentials from one is a business-email-compromise sign.
+const FREEMAIL = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'aol.com', 'icloud.com', 'me.com', 'protonmail.com', 'proton.me', 'gmx.com', 'mail.com', 'zoho.com', 'yandex.com']);
+
+// Click-tracking and link-protection services that legitimately sit between the
+// text a reader sees and the real destination.
+const REDIRECT_SERVICES = new Set(['list-manage.com', 'rs6.net', 'sendgrid.net', 'mailchimp.com', 'mcsv.net', 'mandrillapp.com', 'hubspotlinks.com', 'hubspotemail.net', 'sidekickopen.com', 'mailgun.org', 'awstrack.me', 'exct.net', 'mktdns.com', 'mkt.com', 'klclick.com', 'klclick1.com', 'cmail19.com', 'cmail20.com', 'createsend.com', 'safelinks.protection.outlook.com', 'urldefense.com', 'urldefense.proofpoint.com', 'mimecastprotect.com']);
+const TRACKING_LABELS = new Set(['click', 'clicks', 'link', 'links', 'email', 'em', 'e', 'trk', 'track', 'tracking', 'go', 'r', 't', 'url', 'mail', 'mailer', 'news', 'newsletter', 'lnk', 'ablink']);
 
 const HOMOGLYPHS = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@': 'a' };
 
-// Matched at the start of a word, so "sign in" does not match "design in",
-// while "urgently" still matches "urgent".
-// Generic contest language is weak evidence by itself; keep it low-weight.
-const LOW_SIGNAL_KEYWORDS = new Set(['won', 'win', 'winner']);
+// Everyday words that show up constantly in legitimate mail. As monitored
+// keywords they still appear as signals, but add very little on their own.
+const COMMON_KEYWORDS = new Set(['account', 'security', 'confirm', 'verify', 'expires', 'expire', 'click here', 'won', 'win', 'winner', 'prize', 'urgent', 'update', 'password', 'login', 'sign in', 'suspended', 'payment', 'invoice']);
 
-const PHRASES = [
-  'verify your account',
-  'confirm your identity',
-  'unusual activity',
-  'account will be',
-  'wire transfer',
-  'gift card',
-  'confirm your password',
-  'credential',
-  'sign in',
-  'urgent',
-  'immediately',
-  'suspended',
+// Requests for credentials, money or risky actions: the heart of most phishing.
+// Matched at the start of a word, so "sign in" does not match "design in".
+const REQUEST_PHRASES = [
+  'verify your account', 'verify your identity', 'confirm your identity', 'confirm your password', 'confirm your account',
+  'update your payment', 'payment details', 'bank details', 'banking details', 'direct deposit',
+  'gift card', 'wire transfer', 'enable editing', 'enable content', 'enable macros',
+  'connect your wallet', 'social security number', 'login credentials', 'keep your current password', 'keep your password',
 ];
+// Pressure and fear language. Common in phishing, but also in ordinary reminders.
+const PRESSURE_PHRASES = [
+  'urgent', 'immediately', 'unusual activity', 'within 24 hours', 'in 24 hours', 'final notice', 'act now',
+  'account will be suspended', 'account will be closed', 'account will be deleted', 'account will be deactivated',
+  'account will be locked', 'has been suspended', 'has been locked', 'has been limited', 'expires today', 'keep this between us',
+];
+// Calls to sign in or verify. Harmless on their own; a strong sign of credential
+// phishing when the same email also hides where its links really go.
+const CREDENTIAL_CUES = /\b(sign in|signin|log ?in|password|verify|verification|credentials|unlock|restore access)\b/i;
+const EXEC_TITLES = /\b(ceo|cfo|coo|president|director|chair|chairman|dean|owner|manager|payroll|hr)\b/i;
 
-const RISKY_EXTENSIONS = /\.(exe|scr|js|jse|vbs|bat|cmd|ps1|msi|iso|img|lnk|hta|jar|html?|svg|one|zip|7z|rar|docm|xlsm|pptm)$/i;
+// Attachment types by how often they deliver malware or credential-phishing pages.
+const EXECUTABLE_ATTACHMENT = /\.(exe|scr|js|jse|vbs|vbe|bat|cmd|ps1|msi|iso|img|vhd|lnk|hta|jar|wsf|cpl)$/i;
+const MACRO_OR_PAGE_ATTACHMENT = /\.(docm|xlsm|pptm|xlam|html?|shtml|svg|one)$/i;
+const ARCHIVE_ATTACHMENT = /\.(zip|7z|rar|gz|tar|cab|ace)$/i;
 
 // Two-part public suffixes, so amazon.co.uk is treated as one registrable domain.
 const MULTI_PART_SUFFIXES = new Set(['co.uk', 'org.uk', 'ac.uk', 'com.au', 'co.nz', 'co.jp', 'com.br', 'com.mx', 'co.in', 'co.za']);
@@ -254,7 +279,6 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-const PHRASE_PATTERNS = PHRASES.map((phrase) => ({ phrase, pattern: new RegExp(`\\b${escapeRegExp(phrase)}`, 'i') }));
 
 export function riskLevel(score) {
   if (score >= 75) return 'Critical';
@@ -271,102 +295,181 @@ export function riskLevel(score) {
 // two buckets the UI already groups by ('keyword' = content, 'typo' =
 // sender/infrastructure); `detector` says which rule actually fired.
 // The final score always equals the sum of signal weights (clamped to 0-100).
+//
+// Design (to keep false positives down without losing real attacks):
+//  - Technical evidence (authentication failures, lookalike domains, deceptive
+//    links, dangerous attachments) carries most of the weight.
+//  - Words alone are weak evidence: keyword and phrase points are capped, so an
+//    ordinary password-reset or billing email cannot be flagged on wording alone.
+//  - Authenticated mail from a sender's real domain with no technical warning
+//    signs gets an even lower wording cap.
+//  - Requests for money or credentials from personal webmail are scored as a
+//    sender problem, which is how business-email-compromise scams look.
+const CONTENT_CAP = 30;
+const CONTENT_CAP_AUTHENTICATED = 18;
+const KEYWORD_CAP = 12;
+
+const hasPhrase = (text, phrase) => new RegExp(`\\b${escapeRegExp(phrase)}`, 'i').test(text);
+
+function keywordMatches(haystack, keyword, { caseInsensitive, wholeWordOnly }) {
+  const raw = String(keyword).trim();
+  if (!raw) return false;
+  const needle = escapeRegExp(caseInsensitive ? raw.toLowerCase() : raw);
+  const flags = caseInsensitive ? 'i' : '';
+  // Short words must match whole (so "won" never matches "wonderful"); longer
+  // ones match at the start of a word (so "verify" matches "verification").
+  if (wholeWordOnly || raw.length <= 4) return new RegExp(`\\b${needle}s?\\b`, flags).test(haystack);
+  return new RegExp(`\\b${needle}`, flags).test(haystack);
+}
+
 export function gradeEmail(email, { keywords = [], options = {} } = {}) {
   const signals = [];
   let score = 0;
   const add = (points, signal) => { score += points; signals.push({ source: 'server', weight: points, ...signal }); };
 
   const fromDomain = email.from?.domain || '';
+  const fromRoot = registrable(fromDomain);
   const fromName = email.from?.name || '';
-
-  // 1. User keywords from the Keyword Monitoring page.
-  const matchSubject = options.matchInSubject !== false;
-  const matchBody = options.matchInBody !== false;
-  const haystack = `${matchSubject ? email.subject : ''} ${matchBody ? email.text : ''}`;
-  const caseInsensitive = options.caseInsensitive !== false;
-  const lowered = caseInsensitive ? haystack.toLowerCase() : haystack;
-  for (const keyword of keywords) {
-    const needle = caseInsensitive ? String(keyword).toLowerCase() : String(keyword);
-    if (!needle) continue;
-    const lowSignal = LOW_SIGNAL_KEYWORDS.has(String(keyword).trim().toLowerCase());
-    // Low-signal words use whole-word matching even when substring matching is
-    // enabled, so e.g. "won" does not match "wonderful".
-    const hit = lowSignal || options.wholeWordOnly
-      ? new RegExp(`\\b${escapeRegExp(needle)}\\b`).test(lowered)
-      : lowered.includes(needle);
-    if (hit) {
-      const weight = lowSignal ? 2 : 10;
-      add(weight, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
-    }
-  }
-
-  // 2. Built-in pressure / credential phrases (capped so text alone can't reach Critical).
-  const text = `${email.subject} ${email.text}`;
-  const phraseHits = PHRASE_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ phrase }) => phrase);
-  if (phraseHits.length) {
-    const shown = phraseHits.slice(0, 3).join(', ');
-    add(Math.min(24, phraseHits.length * 8), { type: 'keyword', detector: 'phrase', value: shown, description: `Pressure or credential language: ${shown}` });
-  }
-
-  // 3. Google's own SPF / DKIM / DMARC verdicts.
+  const freemailSender = FREEMAIL.has(fromRoot);
   const dmarc = email.auth?.dmarc || 'none';
   const spf = email.auth?.spf || 'none';
   const dkim = email.auth?.dkim || 'none';
-  if (dmarc === 'fail') add(30, { type: 'typo', detector: 'auth', value: 'dmarc=fail', description: 'DMARC failed: the From domain did not authorize this message.' });
-  if (spf === 'fail' || spf === 'softfail') add(12, { type: 'typo', detector: 'auth', value: `spf=${spf}`, description: `SPF ${spf}: the sending server is not authorized for this domain.` });
-  if (dkim === 'fail') add(10, { type: 'typo', detector: 'auth', value: 'dkim=fail', description: 'DKIM failed: the message content may have been altered.' });
+  const authenticated = dmarc === 'pass';
+  const text = `${email.subject} ${email.text}`;
 
-  // 4. Sender domain imitates a known brand.
+  // ---- Technical evidence ------------------------------------------------
+
+  // 1. Authentication. When DMARC passes, SPF/DKIM failures are just mailing-list
+  //    or forwarding noise, so they only count when DMARC does not pass.
+  if (dmarc === 'fail') add(30, { type: 'typo', detector: 'auth', value: 'dmarc=fail', description: 'DMARC failed: the From domain did not authorize this message.' });
+  if (!authenticated && (spf === 'fail' || spf === 'softfail')) add(10, { type: 'typo', detector: 'auth', value: `spf=${spf}`, description: `SPF ${spf}: the sending server is not authorized for this domain.` });
+  if (!authenticated && dkim === 'fail') add(8, { type: 'typo', detector: 'auth', value: 'dkim=fail', description: 'DKIM failed: the message content may have been altered.' });
+  // Only when the receiving server reported results and none passed. Mail with no
+  // verdict at all (e.g. Outlook-synced) is not penalized for that.
+  const reported = [spf, dkim, dmarc].some((value) => value !== 'none');
+  if (reported && dmarc !== 'pass' && dmarc !== 'fail' && spf !== 'pass' && dkim !== 'pass') {
+    add(8, { type: 'typo', detector: 'auth', value: 'unauthenticated', description: 'The sender could not be authenticated (no SPF, DKIM or DMARC pass).' });
+  }
+
+  // 2. Sender domain imitates a known brand.
   const brand = lookalikeBrand(fromDomain);
   if (brand) add(35, { type: 'typo', detector: 'lookalike-domain', value: fromDomain, description: `Sender domain imitates ${brand}.` });
 
-  // 5. Display name claims a brand the address does not belong to.
-  //    Skipped when the lookalike rule already fired for the same brand, so one
-  //    piece of evidence is not counted twice.
+  // 3. Display name claims a brand the address does not belong to. Skipped when
+  //    the lookalike rule already fired for the same brand, so one piece of
+  //    evidence is not counted twice.
   const nameBrand = displayNameBrand(fromName);
-  if (nameBrand && nameBrand !== brand && !BRANDS[nameBrand].includes(registrable(fromDomain))) {
-    add(20, { type: 'typo', detector: 'display-name', value: fromName, description: `Display name says "${fromName}" but the address is ${email.from.email}.` });
+  if (nameBrand && nameBrand !== brand && !BRANDS[nameBrand].includes(fromRoot)) {
+    add(25, { type: 'typo', detector: 'display-name', value: fromName, description: `Display name says "${fromName}" but the address is ${email.from.email}.` });
   } else if (nameBrand && nameBrand === brand) {
     add(10, { type: 'typo', detector: 'display-name', value: fromName, description: `Display name "${fromName}" matches the imitated brand.` });
   }
 
-  // 6. Replies silently routed to a different domain.
-  if (email.replyTo?.domain && registrable(email.replyTo.domain) !== registrable(fromDomain)) {
-    add(15, { type: 'typo', detector: 'reply-to', value: email.replyTo.email, description: `Replies go to ${email.replyTo.email}, not the sender's domain.` });
-  }
-
-  // 7. Links whose visible text is a domain that differs from the real target.
-  for (const link of email.links || []) {
-    const shownText = (link.text || '').trim();
-    if (!shownText || /\s/.test(shownText)) continue;
-    const shownHost = hostOf(/^https?:/i.test(shownText) ? shownText : `https://${shownText}`);
-    if (!looksLikeDomain(shownHost) || !link.host) continue;
-    if (registrable(shownHost) !== registrable(link.host)) {
-      // Ordinary branded newsletter/tracking links often display a sender's
-      // domain but route through an email-service host. Treat a mismatch as a
-      // strong signal only when the displayed domain claims to be a known brand
-      // or imitates one; raw-IP destinations are scored separately below.
-      if (isBrandDomain(shownHost) || lookalikeBrand(shownHost)) {
-        add(20, { type: 'typo', detector: 'link-mismatch', value: link.host, description: `Link text shows ${shownHost} but opens ${link.host}.` });
-        break;
-      }
+  // 4. Replies routed somewhere else. Lists and help desks do this legitimately,
+  //    so it only counts when replies go to personal webmail or a lookalike, or
+  //    when the sender is not authenticated.
+  const replyDomain = email.replyTo?.domain || '';
+  if (replyDomain && registrable(replyDomain) !== fromRoot) {
+    const replyRoot = registrable(replyDomain);
+    if ((FREEMAIL.has(replyRoot) && !freemailSender) || lookalikeBrand(replyDomain)) {
+      add(20, { type: 'typo', detector: 'reply-to', value: email.replyTo.email, description: `Replies go to ${email.replyTo.email}, a personal or lookalike address, not the sender's domain.` });
+    } else if (!authenticated) {
+      add(8, { type: 'typo', detector: 'reply-to', value: email.replyTo.email, description: `Replies go to ${email.replyTo.email}, not the sender's domain.` });
     }
   }
 
-  // 8. Links that point straight at an IP address.
+  // 5. Deceptive links: the visible text names one domain but the link opens
+  //    another. Ordinary click-tracking is recognized and not counted: known
+  //    redirect services, the sender's own domain, or a tracking subdomain
+  //    ("click.", "links."...) on mail whose sender is authenticated.
+  for (const link of email.links || []) {
+    const shownText = (link.text || '').trim();
+    if (!shownText || /\s/.test(shownText) || !link.host) continue;
+    const shownHost = hostOf(/^https?:/i.test(shownText) ? shownText : `https://${shownText}`);
+    if (!looksLikeDomain(shownHost)) continue;
+    const target = registrable(link.host);
+    if (registrable(shownHost) === target) continue;
+    if (REDIRECT_SERVICES.has(target) || [...REDIRECT_SERVICES].some((service) => link.host.endsWith(`.${service}`))) continue;
+    if (authenticated && target === fromRoot) continue;
+    if (authenticated && TRACKING_LABELS.has(link.host.split('.')[0]) && !isBrandDomain(shownHost) && !lookalikeBrand(shownHost)) continue;
+    add(25, { type: 'typo', detector: 'link-mismatch', value: link.host, description: `Link text shows ${shownHost} but opens ${link.host}.` });
+    break;
+  }
+
+  // 6. Links to a lookalike of a brand (even when the sender looks fine).
+  const lookalikeLink = (email.links || []).find((link) => link.host && registrable(link.host) !== fromRoot && lookalikeBrand(link.host));
+  if (lookalikeLink) add(25, { type: 'typo', detector: 'lookalike-domain', value: lookalikeLink.host, description: `Link goes to ${lookalikeLink.host}, which imitates ${lookalikeBrand(lookalikeLink.host)}.` });
+
+  // 7. Links that point straight at an IP address.
   const ipLink = (email.links || []).find((link) => isIpHost(link.host));
-  if (ipLink) add(15, { type: 'typo', detector: 'link-ip', value: ipLink.host, description: 'Link points to a raw IP address instead of a domain.' });
+  if (ipLink) add(30, { type: 'typo', detector: 'link-ip', value: ipLink.host, description: 'Link points to a raw IP address instead of a domain.' });
 
-  // 9. Dangerous attachment types.
-  const risky = (email.attachments || []).find((file) => RISKY_EXTENSIONS.test(file.filename || ''));
-  if (risky) add(25, { type: 'typo', detector: 'attachment', value: risky.filename, description: `Attachment type is commonly used to deliver malware: ${risky.filename}` });
+  // 7b. A sign-in or verify prompt combined with a deceptive link is the
+  //     credential-harvesting pattern itself.
+  const deceptiveLink = signals.some((signal) => ['link-mismatch', 'link-ip'].includes(signal.detector) || (signal.detector === 'lookalike-domain' && signal.value !== fromDomain));
+  if (deceptiveLink && CREDENTIAL_CUES.test(text)) {
+    add(15, { type: 'typo', detector: 'credential-lure', value: text.match(CREDENTIAL_CUES)[0], description: 'Asks you to sign in or verify through a link that hides its real destination.' });
+  }
 
-  // 10. Gmail itself already thinks it's spam.
-  if (email.labelIds?.includes('SPAM')) add(20, { type: 'typo', detector: 'provider-spam', value: 'SPAM', description: 'Gmail classified this message as spam.' });
+  // 8. Dangerous attachments (names only; attachment bytes are never downloaded).
+  const files = email.attachments || [];
+  const executable = files.find((file) => EXECUTABLE_ATTACHMENT.test(file.filename || ''));
+  const macroOrPage = files.find((file) => MACRO_OR_PAGE_ATTACHMENT.test(file.filename || ''));
+  const archive = files.find((file) => ARCHIVE_ATTACHMENT.test(file.filename || ''));
+  if (executable) add(40, { type: 'typo', detector: 'attachment', value: executable.filename, description: `Program or script attachment, a common way to deliver malware: ${executable.filename}` });
+  else if (macroOrPage) add(40, { type: 'typo', detector: 'attachment', value: macroOrPage.filename, description: `Macro document or web-page attachment, often used to steal passwords or run malware: ${macroOrPage.filename}` });
+  else if (archive) add(authenticated ? 10 : 25, { type: 'typo', detector: 'attachment', value: archive.filename, description: `Compressed attachment that can hide malware: ${archive.filename}` });
 
-  // 11. Fully authenticated mail from a known brand's real domain is trusted more.
-  if (dmarc === 'pass' && isBrandDomain(fromDomain)) {
-    add(-15, { type: 'typo', detector: 'trusted-sender', value: registrable(fromDomain), description: `Authenticated mail from ${registrable(fromDomain)}, a known brand domain.` });
+  // 9. Gmail itself already thinks it's spam.
+  if (email.labelIds?.includes('SPAM')) add(35, { type: 'typo', detector: 'provider-spam', value: 'SPAM', description: 'Gmail classified this message as spam.' });
+
+  // ---- Wording -----------------------------------------------------------
+
+  const requests = REQUEST_PHRASES.filter((phrase) => hasPhrase(text, phrase));
+  const pressure = PRESSURE_PHRASES.filter((phrase) => hasPhrase(text, phrase));
+
+  // 10. Money or credentials requested from personal webmail (or with replies
+  //     diverted to it): the classic business-email-compromise pattern.
+  const replyToFreemail = FREEMAIL.has(registrable(replyDomain)) && !freemailSender;
+  if (requests.length && (freemailSender || replyToFreemail)) {
+    const exec = EXEC_TITLES.test(fromName);
+    add(exec ? 35 : 25, { type: 'typo', detector: 'freemail-request', value: email.from?.email || '', description: `A request involving ${requests.slice(0, 2).join(', ')} came from a personal email account${exec ? ` using the title "${fromName}"` : ''}.` });
+  }
+
+  const technicalWarning = signals.some((signal) => signal.weight > 0);
+  let budget = authenticated && !freemailSender && !technicalWarning ? CONTENT_CAP_AUTHENTICATED : CONTENT_CAP;
+  const spend = (points) => { const used = Math.max(0, Math.min(points, budget)); budget -= used; return used; };
+
+  if (requests.length) {
+    const shown = requests.slice(0, 3).join(', ');
+    add(spend(Math.min(20, requests.length * 10)), { type: 'keyword', detector: 'phrase', value: shown, description: `Asks for credentials, money or a risky action: ${shown}` });
+  }
+  if (pressure.length) {
+    const shown = pressure.slice(0, 3).join(', ');
+    add(spend(Math.min(12, pressure.length * 4)), { type: 'keyword', detector: 'phrase', value: shown, description: `Pressure or fear language: ${shown}` });
+  }
+  if (requests.length && pressure.length) {
+    add(spend(8), { type: 'keyword', detector: 'phrase', value: 'request + pressure', description: 'Combines a request for credentials or money with time pressure.' });
+  }
+
+  // 11. User keywords from the Keyword Monitoring page.
+  const matchSubject = options.matchInSubject !== false;
+  const matchBody = options.matchInBody !== false;
+  const haystack = `${matchSubject ? email.subject : ''} ${matchBody ? email.text : ''}`;
+  const matchOptions = { caseInsensitive: options.caseInsensitive !== false, wholeWordOnly: options.wholeWordOnly === true };
+  let keywordBudget = KEYWORD_CAP;
+  for (const keyword of keywords) {
+    if (!keywordMatches(haystack, keyword, matchOptions)) continue;
+    const raw = COMMON_KEYWORDS.has(String(keyword).trim().toLowerCase()) ? 2 : 8;
+    const points = spend(Math.min(raw, keywordBudget));
+    keywordBudget -= points;
+    add(points, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
+  }
+
+  // 12. Authenticated mail from a known brand's real domain is trusted more.
+  //     Personal webmail never qualifies: anyone can open a Gmail account.
+  if (authenticated && isBrandDomain(fromDomain) && !freemailSender) {
+    add(-20, { type: 'typo', detector: 'trusted-sender', value: fromRoot, description: `Authenticated mail from ${fromRoot}, a known brand domain.` });
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -402,7 +505,9 @@ export function toClientEmail(email, grade, disposition, review = null) {
   };
 }
 
-export function presentStoredEmail(record, { keywords = [], options = {}, threshold = 50 } = {}) {
+// 40 is the default flag threshold: wording alone is capped at 30, so an email
+// needs at least one piece of technical evidence to be flagged.
+export function presentStoredEmail(record, { keywords = [], options = {}, threshold = 40 } = {}) {
   const grade = gradeEmail(record.email, { keywords, options });
   const disposition = record.review?.disposition ?? (grade.riskScore >= threshold ? 'flagged' : 'safe');
   return toClientEmail(record.email, grade, disposition, record.review);

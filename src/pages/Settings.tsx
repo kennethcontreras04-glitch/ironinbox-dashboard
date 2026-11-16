@@ -8,6 +8,7 @@ import type { UserRole } from '../types/roles';
 import EngagementLog from '../components/dashboard/EngagementLog';
 import { useEngagementTracker } from '../utils/useEngagementTracker';
 import { useSettings } from '../contexts/useSettings';
+import RiskSensitivity from '../components/settings/RiskSensitivity';
 
 const ROLE_OPTIONS: { value: UserRole; label: string; blurb: string }[] = [
   { value: 'viewer',  label: 'Viewer',  blurb: 'Dashboard only; sensitive areas hidden.' },
@@ -21,8 +22,6 @@ const Settings: React.FC = () => {
   const {
     alertBehavior,
     updateAlertBehavior,
-    riskFlagThreshold,
-    setRiskFlagThreshold
   } = useSettings();
 
   useEngagementTracker('settings');
@@ -97,29 +96,7 @@ const Settings: React.FC = () => {
         </div>
 
         {/* Risk sensitivity */}
-        <div className={panel}>
-          <h2 className={sectionHead}>Risk Sensitivity</h2>
-          <p className="text-xs text-slate-400 mb-4 dark:text-[var(--dm-text-muted)]">
-            Drag toward <span className="text-slate-600 dark:text-[var(--dm-text-secondary)]">High</span> to flag more messages (lower score cutoff). Toward{' '}
-            <span className="text-slate-600 dark:text-[var(--dm-text-secondary)]">Low</span> to only keep stronger signals.
-          </p>
-          <div className="flex justify-between text-[10px] font-mono uppercase tracking-widest text-slate-400 dark:text-[var(--dm-text-muted)] mb-2">
-            <span>Low</span>
-            <span>High</span>
-          </div>
-          <input
-            type="range"
-            min={25}
-            max={75}
-            value={100 - riskFlagThreshold}
-            onChange={(e) => setRiskFlagThreshold(100 - Number(e.target.value))}
-            className="w-full h-2 rounded-lg appearance-none bg-slate-200 dark:bg-[var(--dm-chrome)] accent-blue-600"
-          />
-          <p className="mt-3 text-sm font-medium text-slate-800 dark:text-[var(--dm-text-primary)]">
-            Flag emails when scores are at least:{' '}
-            <span className="font-mono tabular-nums text-blue-600 dark:text-blue-400">{riskFlagThreshold}</span>
-          </p>
-        </div>
+        <RiskSensitivity panel={panel} sectionHead={sectionHead} />
 
         {/* Role preview */}
         <div className={`${panel} border-blue-200 dark:border-blue-900/40`}>

@@ -14,6 +14,7 @@ import {
 } from '../types';
 import { defaultKeywords } from '../data/defaultKeywords';
 import { useSettings } from './useSettings';
+import { DEFAULT_RISK_THRESHOLD } from '../utils/sensitivity';
 import { useAuth } from './useAuth';
 import { createIncidentFromEmail, createIncidentId, incidentForEmail } from '../utils/incidents';
 import { buildNotifications } from '../utils/notifications';
@@ -109,6 +110,7 @@ export interface AppContextType {
   markAllNotificationsRead: () => void;
   syncMailbox: () => Promise<void>;
   mailboxSyncing: boolean;
+  sensitivityStatus: 'idle' | 'applying' | 'applied' | 'error';
   mailboxError: string | null;
   lastSyncedAt: string | null;
   isWiped: boolean;
@@ -135,6 +137,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const readyForResyncRef = useRef(false);
   const gradingRef = useRef({ keywords, detectionOptions, detectionActions, riskFlagThreshold, user, incidents, accountIntegrations });
   const syncMailboxRef = useRef<() => Promise<void>>(async () => {});
+  const regradeRef = useRef<() => Promise<void>>(async () => {});
+  const regradeQueued = useRef(false);
+  const [sensitivityStatus, setSensitivityStatus] = useState<'idle' | 'applying' | 'applied' | 'error'>('idle');
   const persistWorkspaceRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
@@ -220,10 +225,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       syncInFlight.current = false;
       setMailboxSyncing(false);
       if (syncQueued.current) { syncQueued.current = false; void syncMailbox(); }
+      else if (regradeQueued.current) { regradeQueued.current = false; void regradeRef.current(); }
     }
   };
 
   syncMailboxRef.current = syncMailbox;
+
+  // Re-grade already-synced mail on the server with the current keywords,
+  // options and sensitivity. No Gmail/Outlook calls, so changes apply at once.
+  const regradeMailbox = async () => {
+    const snapshot = gradingRef.current;
+    const currentUser = snapshot.user;
+    if (!currentUser?.uid) return;
+    // A sync in progress would save the settings it started with; re-grade after it.
+    if (syncInFlight.current) { regradeQueued.current = true; return; }
+    setSensitivityStatus('applying');
+    try {
+      const response = await fetch('/api/emails/regrade', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keywords: snapshot.detectionActions.flagEmail ? snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value) : [], options: snapshot.detectionOptions, threshold: snapshot.riskFlagThreshold }),
+      });
+      const data = await response.json() as { messages?: Array<FlaggedEmail & { disposition: EmailDisposition }>; error?: string };
+      if (!response.ok || !data.messages) throw new Error(data.error || 'Unable to apply the new settings.');
+      if (gradingRef.current.user?.uid !== currentUser.uid) return;
+      applyMailboxMessages(data.messages);
+      setSensitivityStatus('applied');
+    } catch {
+      setSensitivityStatus('error');
+    }
+  };
+  regradeRef.current = regradeMailbox;
 
   const persistWorkspace = async () => {
     const currentUser = gradingRef.current.user;
@@ -318,7 +349,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             keywords: Array.isArray(data.keywords) ? data.keywords : defaultKeywords,
             detectionOptions: { ...DEFAULT_OPTIONS, ...data.detectionOptions },
             detectionActions: { ...DEFAULT_ACTIONS, ...data.detectionActions },
-            riskThreshold: Number(data.riskThreshold) || 50,
+            riskThreshold: Number(data.riskThreshold) || DEFAULT_RISK_THRESHOLD,
             incidents: Array.isArray(data.incidents) ? data.incidents : [],
           });
         }
@@ -338,8 +369,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (!user?.uid) return;
     const timer = window.setTimeout(() => {
       if (!readyForResyncRef.current) return;
-      void syncMailboxRef.current();
-    }, 1500);
+      void regradeRef.current();
+    }, 400);
     return () => window.clearTimeout(timer);
   }, [keywords, detectionOptions, detectionActions.flagEmail, riskFlagThreshold, user?.uid]);
 
@@ -596,6 +627,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         markAllNotificationsRead,
         syncMailbox,
         mailboxSyncing,
+        sensitivityStatus,
         mailboxError,
         lastSyncedAt,
         isWiped,

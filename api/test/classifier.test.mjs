@@ -164,7 +164,7 @@ test('trusted-brand discount appears as a signal and weights add up to the score
     from: 'PayPal <service@paypal.com>', subject: 'Please verify your account', text: 'Unusual activity was detected.', auth: PASS,
   }));
   const grade = gradeEmail(email);
-  assert.ok(grade.signals.some((s) => s.detector === 'trusted-sender' && s.weight === -15));
+  assert.ok(grade.signals.some((s) => s.detector === 'trusted-sender' && s.weight === -20));
   assert.equal(grade.riskScore, Math.max(0, sumOfWeights(grade)));
 });
 
@@ -226,4 +226,79 @@ test('brand-domain mismatches still trigger link-mismatch', () => {
     html: '<a href="https://evil.example/login">paypal.com</a>',
   }));
   assert.ok(gradeEmail(email).signals.some((signal) => signal.detector === 'link-mismatch'));
+});
+
+// --- Detection rework: fewer false positives without losing real attacks -----
+
+const detectorsOf = (grade) => grade.signals.map((s) => s.detector);
+
+test('wording alone can never reach the default flag threshold', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'Team <team@example.com>', subject: 'Urgent: verify your account immediately', auth: PASS,
+    text: 'Unusual activity. Verify your account and confirm your password within 24 hours. Final notice. Gift card. Wire transfer.',
+  }));
+  const grade = gradeEmail(email, { keywords: ['verify', 'urgent', 'account', 'security', 'confirm', 'password', 'expires'] });
+  const wording = grade.signals.filter((s) => s.type === 'keyword').reduce((sum, s) => sum + s.weight, 0);
+  assert.ok(wording <= 18, `authenticated sender, no technical signs: wording capped at 18, got ${wording}`);
+  assert.ok(grade.riskScore < 40);
+  assert.equal(grade.riskScore, Math.max(0, sumOfWeights(grade)));
+});
+
+test('SPF and DKIM failures are ignored when DMARC passes (mailing-list forwarding)', () => {
+  const forwarded = 'mx.google.com; dkim=fail header.i=@lists.example.net; dkim=pass header.i=@example.com; spf=softfail smtp.mailfrom=lists.example.net; dmarc=pass header.from=example.com';
+  const email = normalizeGmailMessage(gmailMessage({ from: 'Prof <prof@example.com>', subject: 'Reading list', text: 'See you Thursday.', auth: forwarded }));
+  assert.equal(gradeEmail(email).riskScore, 0);
+});
+
+test('known click-tracking services and the sender\'s own domain are not deceptive links', () => {
+  for (const href of ['https://citylib.us21.list-manage.com/track/click?u=1', 'https://r20.rs6.net/tn.jsp?f=1', 'https://click.example.com/c/1']) {
+    const email = normalizeGmailMessage(gmailMessage({ from: 'News <news@example.com>', subject: 'Update', auth: PASS, html: `<a href="${href}">example.com</a>` }));
+    assert.ok(!detectorsOf(gradeEmail(email)).includes('link-mismatch'), href);
+  }
+});
+
+test('a non-brand domain shown in link text but opening elsewhere is still caught', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'Coastal CU <alerts@coastal-cu-secure.com>', subject: 'Verify your identity', auth: 'mx.google.com; spf=neutral smtp.mailfrom=coastal-cu-secure.com',
+    html: 'Sign in to keep access. <a href="https://ccu-auth-check.xyz/login">coastalcu.org</a>',
+  }));
+  const detectors = detectorsOf(gradeEmail(email));
+  assert.ok(detectors.includes('link-mismatch') && detectors.includes('credential-lure'));
+});
+
+test('personal webmail never earns brand trust, and money requests from it are flagged', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'Robert Hayes CEO <robert.hayes.ceo@gmail.com>', subject: 'Quick favor', auth: 'mx.google.com; dkim=pass header.i=@gmail.com; spf=pass smtp.mailfrom=gmail.com; dmarc=pass header.from=gmail.com',
+    text: 'I need you to buy gift cards for a client today. It is urgent. Keep this between us.',
+  }));
+  const grade = gradeEmail(email);
+  assert.ok(!detectorsOf(grade).includes('trusted-sender'));
+  assert.ok(detectorsOf(grade).includes('freemail-request'));
+  assert.ok(grade.riskScore >= 50, `got ${grade.riskScore}`);
+});
+
+test('reply-to on another business domain is fine for authenticated mail, but not to personal webmail', () => {
+  const helpdesk = normalizeGmailMessage(gmailMessage({ from: 'Shop <orders@example.com>', replyTo: 'support@helpdesk-vendor.com', subject: 'Order', text: 'Thanks', auth: PASS }));
+  assert.ok(!detectorsOf(gradeEmail(helpdesk)).includes('reply-to'));
+  const diverted = normalizeGmailMessage(gmailMessage({ from: 'AR <ar@example.com>', replyTo: 'example.billing@gmail.com', subject: 'Bank details changed', text: 'Send future payments by wire transfer.', auth: PASS }));
+  const grade = gradeEmail(diverted);
+  assert.ok(detectorsOf(grade).includes('reply-to') && detectorsOf(grade).includes('freemail-request'));
+});
+
+test('attachment risk is tiered by type', () => {
+  const weightFor = (filename, auth = PASS) => gradeEmail(normalizeGmailMessage(gmailMessage({ from: 'a@example.com', subject: 'File', text: 'Attached.', auth, attachments: [filename] })))
+    .signals.find((s) => s.detector === 'attachment')?.weight ?? 0;
+  assert.equal(weightFor('report.pdf'), 0);
+  assert.equal(weightFor('setup.exe'), 40);
+  assert.equal(weightFor('invoice.html'), 40);
+  assert.equal(weightFor('photos.zip'), 10);
+  assert.equal(weightFor('photos.zip', FAIL), 25);
+});
+
+test('brands\' own infrastructure domains are not lookalikes', () => {
+  for (const domain of ['googlegroups.com', 'sharepoint.com', 'amazonses.com', 'wellsfargoadvisors.com', 'licdn.com']) {
+    assert.equal(lookalikeBrand(domain), null, domain);
+  }
+  assert.equal(lookalikeBrand('usps-redelivery.com'), 'usps');
+  assert.equal(lookalikeBrand('docusign-review.net'), 'docusign');
 });

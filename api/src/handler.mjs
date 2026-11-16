@@ -104,8 +104,16 @@ function parseWorkspace(body) {
       logMatch: actions.logMatch !== false,
       showInDashboard: actions.showInDashboard !== false,
     },
-    riskThreshold: body.riskThreshold === undefined ? 50 : Math.max(0, Math.min(100, Number(body.riskThreshold))),
+    riskThreshold: body.riskThreshold === undefined ? DEFAULT_THRESHOLD : Math.max(0, Math.min(100, Number(body.riskThreshold))),
     incidents: Array.isArray(body.incidents) ? body.incidents.map(sanitizeIncident).filter(Boolean).slice(0, 100) : [],
+  };
+}
+export const DEFAULT_THRESHOLD = 40;
+function gradingSettings(body) {
+  return {
+    keywords: Array.isArray(body.keywords) ? body.keywords.filter(x => typeof x === 'string').slice(0, 200) : [],
+    options: body.options && typeof body.options === 'object' ? body.options : {},
+    threshold: Number.isFinite(Number(body.threshold)) ? Math.max(0, Math.min(100, Number(body.threshold))) : DEFAULT_THRESHOLD,
   };
 }
 async function readJson(request) {
@@ -462,11 +470,7 @@ if (request.method === 'POST' &&
         if (!mailbox.monitoring) throw fail(409, 'Monitoring is paused for this mailbox.');
         const provider = providers[mailbox.provider];
         if (!provider?.configured) throw fail(503, 'This email provider is not configured.');
-        user.settings = {
-          keywords: Array.isArray(body.keywords) ? body.keywords.filter(x => typeof x === 'string').slice(0, 200) : [],
-          options: body.options && typeof body.options === 'object' ? body.options : {},
-          threshold: Number.isFinite(Number(body.threshold)) ? Math.max(0, Math.min(100, Number(body.threshold))) : 50,
-        };
+        user.settings = gradingSettings(body);
         if (mailbox.tokenExpiresAt < Date.now() + 30_000) {
           if (!mailbox.refreshToken) throw fail(401, 'Reconnect this mailbox to renew access.');
           const token = await provider.refresh(mailbox.refreshToken);
@@ -495,6 +499,13 @@ if (request.method === 'POST' &&
         }
         await write(userKey, user, record.etag);
         return json(200, { updated });
+      }
+      // Re-grade already-synced mail with new keywords, options or sensitivity.
+      // No Gmail/Graph calls, so the Settings slider takes effect immediately.
+      if (request.method === 'POST' && path === '/api/emails/regrade') {
+        user.settings = gradingSettings(await readJson(request));
+        await write(userKey, user, record.etag);
+        return json(200, { messages: clientMessages(user), threshold: user.settings.threshold });
       }
       if (request.method === 'GET' && path === '/api/emails') return json(200, { messages: clientMessages(user) });
       return json(404, { error: 'Not found.' });

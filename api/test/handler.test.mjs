@@ -430,3 +430,17 @@ test('Supabase login creates a persistent IronInbox session', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+test('regrade applies new sensitivity to synced mail instantly without calling the mail provider', async () => {
+  const s = setup(); const { cookie } = await s.oauth(); const mailbox = await s.connect(cookie);
+  const synced = await s.sync(cookie, mailbox.id, { threshold: 75 });
+  assert.equal(synced.jsonBody.messages[0].disposition, 'safe');
+  const providerCalls = s.requests.length;
+  const regraded = await s.request('/api/emails/regrade', 'POST', cookie, { threshold: 0, keywords: ['urgent'], options: {} });
+  assert.equal(regraded.status, 200);
+  assert.equal(regraded.jsonBody.threshold, 0);
+  assert.equal(regraded.jsonBody.messages[0].disposition, 'flagged');
+  assert.equal(s.requests.length, providerCalls, 'no Gmail or Graph requests');
+  // The new setting is saved, so later loads use it too.
+  assert.equal((await s.request('/api/emails', 'GET', cookie)).jsonBody.messages[0].disposition, 'flagged');
+  assert.equal((await s.request('/api/emails/regrade', 'POST', cookie, { threshold: 0 }, 'https://attacker.example')).status, 403);
+});
