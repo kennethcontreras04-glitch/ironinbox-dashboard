@@ -197,3 +197,33 @@ test("prefers Google's Authentication-Results over a forged one", () => {
   }));
   assert.equal(email.auth.dmarc, 'fail');
 });
+
+
+// --- False-positive tuning ---------------------------------------------------
+
+test('common contest words have low weight and whole-word matching', () => {
+  const won = normalizeGmailMessage(gmailMessage({ from: 'a@example.com', subject: 'You won a prize', text: 'Thanks for participating.', auth: PASS }));
+  const grade = gradeEmail(won, { keywords: ['won'] });
+  const keywordSignal = grade.signals.find((signal) => signal.detector === 'user-keyword');
+  assert.equal(keywordSignal.weight, 2);
+  assert.equal(grade.riskScore, 2);
+
+  const substring = normalizeGmailMessage(gmailMessage({ from: 'a@example.com', subject: 'Wonderful news', text: 'Nothing else.', auth: PASS }));
+  assert.ok(!gradeEmail(substring, { keywords: ['won'] }).signals.some((signal) => signal.detector === 'user-keyword'));
+});
+
+test('ordinary visible domains routed through tracking hosts do not trigger link-mismatch', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'Newsletter <news@example.com>', subject: 'Monthly update', text: '', auth: PASS,
+    html: '<a href="https://click.mailer.example/c/123">example.com</a>',
+  }));
+  assert.ok(!gradeEmail(email).signals.some((signal) => signal.detector === 'link-mismatch'));
+});
+
+test('brand-domain mismatches still trigger link-mismatch', () => {
+  const email = normalizeGmailMessage(gmailMessage({
+    from: 'a@example.com', subject: 'Account notice', text: '', auth: PASS,
+    html: '<a href="https://evil.example/login">paypal.com</a>',
+  }));
+  assert.ok(gradeEmail(email).signals.some((signal) => signal.detector === 'link-mismatch'));
+});

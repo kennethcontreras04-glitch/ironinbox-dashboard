@@ -18,6 +18,9 @@ const HOMOGLYPHS = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@'
 
 // Matched at the start of a word, so "sign in" does not match "design in",
 // while "urgently" still matches "urgent".
+// Generic contest language is weak evidence by itself; keep it low-weight.
+const LOW_SIGNAL_KEYWORDS = new Set(['won', 'win', 'winner']);
+
 const PHRASES = [
   'verify your account',
   'confirm your identity',
@@ -285,10 +288,16 @@ export function gradeEmail(email, { keywords = [], options = {} } = {}) {
   for (const keyword of keywords) {
     const needle = caseInsensitive ? String(keyword).toLowerCase() : String(keyword);
     if (!needle) continue;
-    const hit = options.wholeWordOnly
+    const lowSignal = LOW_SIGNAL_KEYWORDS.has(String(keyword).trim().toLowerCase());
+    // Low-signal words use whole-word matching even when substring matching is
+    // enabled, so e.g. "won" does not match "wonderful".
+    const hit = lowSignal || options.wholeWordOnly
       ? new RegExp(`\\b${escapeRegExp(needle)}\\b`).test(lowered)
       : lowered.includes(needle);
-    if (hit) add(10, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
+    if (hit) {
+      const weight = lowSignal ? 2 : 10;
+      add(weight, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
+    }
   }
 
   // 2. Built-in pressure / credential phrases (capped so text alone can't reach Critical).
@@ -333,8 +342,14 @@ export function gradeEmail(email, { keywords = [], options = {} } = {}) {
     const shownHost = hostOf(/^https?:/i.test(shownText) ? shownText : `https://${shownText}`);
     if (!looksLikeDomain(shownHost) || !link.host) continue;
     if (registrable(shownHost) !== registrable(link.host)) {
-      add(20, { type: 'typo', detector: 'link-mismatch', value: link.host, description: `Link text shows ${shownHost} but opens ${link.host}.` });
-      break;
+      // Ordinary branded newsletter/tracking links often display a sender's
+      // domain but route through an email-service host. Treat a mismatch as a
+      // strong signal only when the displayed domain claims to be a known brand
+      // or imitates one; raw-IP destinations are scored separately below.
+      if (isBrandDomain(shownHost) || lookalikeBrand(shownHost)) {
+        add(20, { type: 'typo', detector: 'link-mismatch', value: link.host, description: `Link text shows ${shownHost} but opens ${link.host}.` });
+        break;
+      }
     }
   }
 
