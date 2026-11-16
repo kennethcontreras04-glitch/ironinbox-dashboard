@@ -33,7 +33,10 @@ const pct = (part, whole) => (whole ? Math.round((part / whole) * 1000) / 10 : 0
 function evaluate(name, set) {
   const rows = set.map((spec, index) => {
     const grade = gradeEmail(buildEmail(spec, index), { keywords, options });
-    return { ...spec, score: grade.riskScore, level: grade.riskLevel, flagged: grade.riskScore >= threshold,
+    // Threat detection uses the risk score only. Keyword matches are reported
+    // separately: they flag an email as a "keyword match", not as a threat.
+    const keywordMatch = grade.signals.some(s => s.detector === 'user-keyword');
+    return { ...spec, score: grade.riskScore, level: grade.riskLevel, flagged: grade.riskScore >= threshold, keywordOnly: keywordMatch && grade.riskScore < threshold,
       signals: grade.signals.map(s => `${s.detector}${s.weight >= 0 ? '+' : ''}${s.weight}`) };
   });
   const suspicious = rows.filter(row => row.label === 'suspicious');
@@ -48,6 +51,8 @@ function evaluate(name, set) {
     wronglyFlagged: falsePositives.map(row => ({ id: row.id, note: row.note, score: row.score, signals: row.signals })),
     rows,
   };
+  result.keywordOnlyNormal = normal.filter(row => row.keywordOnly).length;
+  result.keywordOnlySuspicious = suspicious.filter(row => row.keywordOnly).length;
   result.meetsDetection = result.detectionRate >= TARGETS.detection;
   result.meetsFalsePositive = result.falsePositiveRate < TARGETS.falsePositive;
   return result;
@@ -63,6 +68,7 @@ if (json) {
     console.log(`\n=== ${r.set.toUpperCase()} SET (${r.total} emails, flag threshold ${r.threshold}) ===`);
     console.log(`Detection rate:      ${r.detectionRate}%  (${r.detected}/${r.suspicious})  target >= ${TARGETS.detection}%  ${r.meetsDetection ? 'MET' : 'NOT MET'}`);
     console.log(`False-positive rate: ${r.falsePositiveRate}%  (${r.falsePositives}/${r.normal})  target < ${TARGETS.falsePositive}%  ${r.meetsFalsePositive ? 'MET' : 'NOT MET'}`);
+    console.log(`Keyword matches only:  ${r.keywordOnlyNormal}/${r.normal} normal, ${r.keywordOnlySuspicious}/${r.suspicious} suspicious (listed as "Keyword match", not threats)`);
     for (const row of r.missed) console.log(`  MISSED   ${row.id} (${row.score}) ${row.note}  [${row.signals.join(', ')}]`);
     for (const row of r.wronglyFlagged) console.log(`  FALSE+   ${row.id} (${row.score}) ${row.note}  [${row.signals.join(', ')}]`);
     if (verbose) {

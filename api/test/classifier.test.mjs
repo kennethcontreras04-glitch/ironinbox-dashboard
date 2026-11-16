@@ -7,6 +7,7 @@ import {
   lookalikeBrand,
   gradeEmail,
   toClientEmail,
+  presentStoredEmail,
 } from '../src/classify.mjs';
 
 const b64 = (value) => Buffer.from(value, 'utf8').toString('base64url');
@@ -201,12 +202,12 @@ test("prefers Google's Authentication-Results over a forged one", () => {
 
 // --- False-positive tuning ---------------------------------------------------
 
-test('common contest words have low weight and whole-word matching', () => {
+test('monitored keywords are recorded but add nothing to the risk score, and match whole words', () => {
   const won = normalizeGmailMessage(gmailMessage({ from: 'a@example.com', subject: 'You won a prize', text: 'Thanks for participating.', auth: PASS }));
   const grade = gradeEmail(won, { keywords: ['won'] });
   const keywordSignal = grade.signals.find((signal) => signal.detector === 'user-keyword');
-  assert.equal(keywordSignal.weight, 2);
-  assert.equal(grade.riskScore, 2);
+  assert.equal(keywordSignal.weight, 0);
+  assert.equal(grade.riskScore, 0);
 
   const substring = normalizeGmailMessage(gmailMessage({ from: 'a@example.com', subject: 'Wonderful news', text: 'Nothing else.', auth: PASS }));
   assert.ok(!gradeEmail(substring, { keywords: ['won'] }).signals.some((signal) => signal.detector === 'user-keyword'));
@@ -232,7 +233,7 @@ test('brand-domain mismatches still trigger link-mismatch', () => {
 
 const detectorsOf = (grade) => grade.signals.map((s) => s.detector);
 
-test('wording alone can never reach the default flag threshold', () => {
+test('wording alone can never reach the default risk threshold', () => {
   const email = normalizeGmailMessage(gmailMessage({
     from: 'Team <team@example.com>', subject: 'Urgent: verify your account immediately', auth: PASS,
     text: 'Unusual activity. Verify your account and confirm your password within 24 hours. Final notice. Gift card. Wire transfer.',
@@ -301,4 +302,20 @@ test('brands\' own infrastructure domains are not lookalikes', () => {
   }
   assert.equal(lookalikeBrand('usps-redelivery.com'), 'usps');
   assert.equal(lookalikeBrand('docusign-review.net'), 'docusign');
+});
+
+test('keyword matches flag the email separately from risk; reviews always win', () => {
+  const email = normalizeGmailMessage(gmailMessage({ from: 'Team <team@example.com>', subject: 'Gift card for the raffle', text: 'Pick it up Friday.', auth: PASS }));
+  const keywordFlag = presentStoredEmail({ email }, { keywords: ['gift card'], threshold: 40 });
+  assert.equal(keywordFlag.disposition, 'flagged');
+  assert.equal(keywordFlag.flagReason, 'keyword');
+  assert.ok(keywordFlag.riskScore < 40, 'a keyword match is not a threat score');
+  const off = presentStoredEmail({ email }, { keywords: ['gift card'], options: { flagOnKeyword: false }, threshold: 40 });
+  assert.equal(off.disposition, 'safe');
+  assert.ok(off.signals.some((signal) => signal.detector === 'user-keyword'), 'still tagged when flagging is off');
+  const reviewed = presentStoredEmail({ email, review: { disposition: 'safe', by: 'a@example.com', at: '2026-11-16T00:00:00Z' } }, { keywords: ['gift card'] });
+  assert.equal(reviewed.disposition, 'safe');
+  const phish = normalizeGmailMessage(gmailMessage({ from: 'PayPal <service@paypa1-secure.com>', subject: 'Limited', text: 'Verify your account.', auth: FAIL,
+    html: '<a href="https://paypa1-secure.com/x">paypal.com</a>' }));
+  assert.equal(presentStoredEmail({ email: phish }, { keywords: ['gift card'] }).flagReason, 'risk');
 });

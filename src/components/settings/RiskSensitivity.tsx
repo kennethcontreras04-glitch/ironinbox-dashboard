@@ -13,16 +13,21 @@ const fromSlider = (position: number) => MIN_RISK_THRESHOLD + MAX_RISK_THRESHOLD
 
 export default function RiskSensitivity({ panel, sectionHead }: { panel: string; sectionHead: string }) {
   const { riskFlagThreshold, setRiskFlagThreshold } = useSettings();
-  const { flaggedEmails, releasedEmails, sensitivityStatus } = useApp();
+  const { flaggedEmails, releasedEmails, sensitivityStatus, detectionActions } = useApp();
 
   // Every synced email with its score. Emails an analyst already reviewed keep
-  // their decision, whatever the sensitivity.
-  const emails = useMemo(() => [
-    ...flaggedEmails.map(email => ({ id: email.id, score: email.riskScore, reviewed: email.review?.disposition })),
-    ...releasedEmails.map(item => ({ id: item.originalEmail.id, score: item.originalEmail.riskScore, reviewed: item.originalEmail.review?.disposition })),
-  ], [flaggedEmails, releasedEmails]);
-  const wouldFlag = (email: (typeof emails)[number]) => (email.reviewed ? email.reviewed === 'flagged' : email.score >= riskFlagThreshold);
+  // their decision, and keyword matches stay flagged, whatever the sensitivity.
+  const emails = useMemo(() => [...flaggedEmails, ...releasedEmails.map(item => item.originalEmail)].map(email => ({
+    id: email.id,
+    score: email.riskScore,
+    reviewed: email.review?.disposition,
+    keyword: email.signals.some(signal => signal.detector === 'user-keyword'),
+  })), [flaggedEmails, releasedEmails]);
+  const wouldFlag = (email: (typeof emails)[number]) => (email.reviewed
+    ? email.reviewed === 'flagged'
+    : email.score >= riskFlagThreshold || (email.keyword && detectionActions.flagEmail));
   const flaggedCount = emails.filter(wouldFlag).length;
+  const keywordOnlyCount = emails.filter(email => !email.reviewed && email.keyword && detectionActions.flagEmail && email.score < riskFlagThreshold).length;
 
   const preset = presetFor(riskFlagThreshold);
   const status = {
@@ -97,7 +102,7 @@ export default function RiskSensitivity({ panel, sectionHead }: { panel: string;
               <span
                 key={email.id}
                 className={clsx('absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-white dark:ring-[var(--dm-surface-card)]',
-                  wouldFlag(email) ? 'bg-red-500' : 'bg-emerald-500')}
+                  !wouldFlag(email) ? 'bg-emerald-500' : email.score >= riskFlagThreshold || email.reviewed ? 'bg-red-500' : 'bg-amber-400')}
                 style={{ left: `${Math.min(99, Math.max(1, email.score))}%` }}
               />
             ))}
@@ -115,7 +120,7 @@ export default function RiskSensitivity({ panel, sectionHead }: { panel: string;
       </p>
       <p className="mt-1 text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">
         {emails.length > 0
-          ? `This setting flags ${flaggedCount} of your ${emails.length} synced emails. Emails you already reviewed keep your decision.`
+          ? `This setting flags ${flaggedCount} of your ${emails.length} synced emails${keywordOnlyCount ? ` (${keywordOnlyCount} only because of a monitored keyword, which this setting doesn't affect)` : ''}. Emails you already reviewed keep your decision.`
           : 'Connect and sync a mailbox to see how this setting affects your emails.'}
         {preset ? ` ${preset.description}` : ''}
       </p>

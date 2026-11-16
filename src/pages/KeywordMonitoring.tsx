@@ -12,7 +12,7 @@ const KEYWORD_MENU_Z = 200;
 const KeywordMonitoring: React.FC = () => {
   useEngagementTracker('keyword-monitoring');
   const {
-    keywords, addKeyword, deleteKeyword, toggleKeyword, updateKeyword,
+    keywords, addKeyword, deleteKeyword, toggleKeyword, updateKeyword, applyRecommendedKeywords,
     detectionOptions, detectionActions, updateDetectionOptions, updateDetectionActions,
     saveWorkspace, workspaceSaveStatus,
   } = useApp();
@@ -110,7 +110,19 @@ const KeywordMonitoring: React.FC = () => {
 
             {/* Active Keywords */}
             <div className={`${panel} p-5`}>
-              <h2 className={`${sectionHead} mb-4`}>Active Keywords</h2>
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h2 className={sectionHead}>Active Keywords</h2>
+                  <p className="text-xs text-slate-400 mt-0.5 dark:text-[var(--dm-text-muted)]">
+                    Emails containing these are tagged “Keyword match”. Specific phrases work best; everyday words like “account” match most normal mail.
+                  </p>
+                </div>
+                <button type="button"
+                  onClick={() => { if (window.confirm('Replace your keyword list with the recommended phishing phrases?')) applyRecommendedKeywords(); }}
+                  className="flex-shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-[var(--dm-border)] dark:text-[var(--dm-text-secondary)] dark:hover:bg-white/[0.04]">
+                  Use recommended keywords
+                </button>
+              </div>
 
               {/* Add keyword input */}
               <div className="flex items-center space-x-2 mb-2">
@@ -214,7 +226,7 @@ const KeywordMonitoring: React.FC = () => {
               <p className="text-xs text-slate-400 mb-4 dark:text-[var(--dm-text-muted)]">Define what happens when a keyword is detected.</p>
               <div>
                 {[
-                  { key: 'flagEmail',        label: 'Flag the email',              desc: 'Automatically flag emails containing keywords' },
+                  { key: 'flagEmail',        label: 'Flag the email',              desc: 'Put emails that contain a keyword in Flagged Emails, tagged "Keyword match". Keywords never change an email\'s risk score.' },
                   { key: 'logMatch',         label: 'Log keyword match',           desc: 'Record all keyword matches in the system log' },
                   { key: 'showInDashboard',  label: 'Show reason in dashboard',    desc: 'Display matched keyword in the flagged emails dashboard' },
                 ].map(act => (

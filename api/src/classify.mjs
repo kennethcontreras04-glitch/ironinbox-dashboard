@@ -35,10 +35,6 @@ const TRACKING_LABELS = new Set(['click', 'clicks', 'link', 'links', 'email', 'e
 
 const HOMOGLYPHS = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@': 'a' };
 
-// Everyday words that show up constantly in legitimate mail. As monitored
-// keywords they still appear as signals, but add very little on their own.
-const COMMON_KEYWORDS = new Set(['account', 'security', 'confirm', 'verify', 'expires', 'expire', 'click here', 'won', 'win', 'winner', 'prize', 'urgent', 'update', 'password', 'login', 'sign in', 'suspended', 'payment', 'invoice']);
-
 // Requests for credentials, money or risky actions: the heart of most phishing.
 // Matched at the start of a word, so "sign in" does not match "design in".
 const REQUEST_PHRASES = [
@@ -307,7 +303,6 @@ export function riskLevel(score) {
 //    sender problem, which is how business-email-compromise scams look.
 const CONTENT_CAP = 30;
 const CONTENT_CAP_AUTHENTICATED = 18;
-const KEYWORD_CAP = 12;
 
 const hasPhrase = (text, phrase) => new RegExp(`\\b${escapeRegExp(phrase)}`, 'i').test(text);
 
@@ -452,18 +447,16 @@ export function gradeEmail(email, { keywords = [], options = {} } = {}) {
     add(spend(8), { type: 'keyword', detector: 'phrase', value: 'request + pressure', description: 'Combines a request for credentials or money with time pressure.' });
   }
 
-  // 11. User keywords from the Keyword Monitoring page.
+  // 11. User keywords from the Keyword Monitoring page. A match is recorded
+  //     (and can flag the email as a "keyword match", see presentStoredEmail)
+  //     but adds nothing to the risk score: the score measures threat evidence.
   const matchSubject = options.matchInSubject !== false;
   const matchBody = options.matchInBody !== false;
   const haystack = `${matchSubject ? email.subject : ''} ${matchBody ? email.text : ''}`;
   const matchOptions = { caseInsensitive: options.caseInsensitive !== false, wholeWordOnly: options.wholeWordOnly === true };
-  let keywordBudget = KEYWORD_CAP;
   for (const keyword of keywords) {
     if (!keywordMatches(haystack, keyword, matchOptions)) continue;
-    const raw = COMMON_KEYWORDS.has(String(keyword).trim().toLowerCase()) ? 2 : 8;
-    const points = spend(Math.min(raw, keywordBudget));
-    keywordBudget -= points;
-    add(points, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Contains monitored keyword: ${keyword}` });
+    add(0, { type: 'keyword', detector: 'user-keyword', value: keyword, description: `Matches your monitored keyword: ${keyword}` });
   }
 
   // 12. Authenticated mail from a known brand's real domain is trusted more.
@@ -505,12 +498,20 @@ export function toClientEmail(email, grade, disposition, review = null) {
   };
 }
 
-// 40 is the default flag threshold: wording alone is capped at 30, so an email
-// needs at least one piece of technical evidence to be flagged.
+// An email is flagged for one of two reasons:
+//  - 'risk':    its risk score reaches the threshold (40 by default; wording alone
+//               is capped at 30, so this needs at least one technical warning sign).
+//  - 'keyword': it matches a monitored keyword and "Flag the email" is on. These
+//               stay separate from threats: they add nothing to the risk score.
+// An analyst's review always wins.
 export function presentStoredEmail(record, { keywords = [], options = {}, threshold = 40 } = {}) {
   const grade = gradeEmail(record.email, { keywords, options });
-  const disposition = record.review?.disposition ?? (grade.riskScore >= threshold ? 'flagged' : 'safe');
-  return toClientEmail(record.email, grade, disposition, record.review);
+  const keywordMatch = grade.signals.some((signal) => signal.detector === 'user-keyword');
+  const flagReason = grade.riskScore >= threshold ? 'risk'
+    : keywordMatch && options.flagOnKeyword !== false ? 'keyword'
+      : undefined;
+  const disposition = record.review?.disposition ?? (flagReason ? 'flagged' : 'safe');
+  return { ...toClientEmail(record.email, grade, disposition, record.review), flagReason };
 }
 
 // Microsoft Graph message -> the same representation consumed by gradeEmail.

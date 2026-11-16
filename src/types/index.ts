@@ -61,6 +61,8 @@ export type FlaggedEmail = {
   links?: EmailLink[];
   attachments?: EmailAttachment[];
   disposition?: EmailDisposition;
+  /** Why it was flagged: a risk score at or above the threshold, or only a monitored keyword. */
+  flagReason?: 'risk' | 'keyword';
   review?: EmailReview;
 }
 

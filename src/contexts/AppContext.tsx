@@ -101,6 +101,7 @@ export interface AppContextType {
   reFlagReleasedEmails: (releasedIds: string[]) => void;
   addKeyword: (keyword: string) => boolean;
   deleteKeyword: (keywordId: string) => void;
+  applyRecommendedKeywords: () => void;
   toggleKeyword: (id: string) => void;
   updateKeyword: (id: string, text: string) => boolean;
   updateDetectionOptions: (options: Partial<DetectionOptions>) => void;
@@ -183,6 +184,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  // Keywords are always sent so matches are tagged; "Flag the email" decides
+  // whether a match alone puts the email in Flagged Emails.
+  const gradingPayload = (snapshot: typeof gradingRef.current) => ({
+    keywords: snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value),
+    options: { ...snapshot.detectionOptions, flagOnKeyword: snapshot.detectionActions.flagEmail },
+    threshold: snapshot.riskFlagThreshold,
+  });
+
   const syncInFlight = useRef(false);
   const syncQueued = useRef(false);
   const syncMailbox = async () => {
@@ -202,7 +211,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (!stillCurrent()) return;
             const response = await fetch('/api/mailboxes/sync', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ mailboxId: mailbox.id, keywords: snapshot.detectionActions.flagEmail ? snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value) : [], options: snapshot.detectionOptions, threshold: snapshot.riskFlagThreshold }),
+              body: JSON.stringify({ mailboxId: mailbox.id, ...gradingPayload(snapshot) }),
             });
             const data = await response.json() as { lastSyncedAt?: string; error?: string; hasMore?: boolean };
             if (!response.ok) throw new Error(data.error || 'Unable to sync this mailbox.');
@@ -243,7 +252,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const response = await fetch('/api/emails/regrade', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: snapshot.detectionActions.flagEmail ? snapshot.keywords.filter(keyword => keyword.enabled).map(keyword => keyword.value) : [], options: snapshot.detectionOptions, threshold: snapshot.riskFlagThreshold }),
+        body: JSON.stringify({ ...gradingPayload(snapshot) }),
       });
       const data = await response.json() as { messages?: Array<FlaggedEmail & { disposition: EmailDisposition }>; error?: string };
       if (!response.ok || !data.messages) throw new Error(data.error || 'Unable to apply the new settings.');
@@ -489,6 +498,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return true;
   };
 
+  // Replace the list with the recommended starter phrases (fresh copies, so
+  // editing them never changes the defaults).
+  const applyRecommendedKeywords = () => {
+    setKeywords(defaultKeywords.map(keyword => ({ ...keyword, createdAt: new Date().toISOString() })));
+  };
+
   const deleteKeyword = (keywordId: string) => {
     setKeywords(prev => prev.filter(kw => kw.id !== keywordId));
   };
@@ -618,6 +633,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         reFlagReleasedEmails,
         addKeyword,
         deleteKeyword,
+        applyRecommendedKeywords,
         toggleKeyword,
         updateKeyword,
         updateDetectionOptions,

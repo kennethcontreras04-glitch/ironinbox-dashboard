@@ -12,7 +12,12 @@ import {
 } from './keywordSignals';
 
 export type EmailStats = {
+  /** Everything in the Flagged Emails queue (threats + keyword-only matches). */
   totalFlagged: number;
+  /** Flagged because of real risk evidence; drives the threat numbers below. */
+  threatCount: number;
+  /** Flagged only because a monitored keyword matched; not counted as threats. */
+  keywordMatchCount: number;
   totalReleased: number;
   totalProcessed: number;
   criticalCount: number;
@@ -56,20 +61,24 @@ export function computeEmailStats(input: {
   const { flaggedEmails, releasedEmails = [], keywords, incidents, detectionActions } = input;
   const visibleFlagged = filterVisibleFlaggedEmails(flaggedEmails, keywords);
   const totalFlagged = visibleFlagged.length;
+  // Keyword-only matches are the user's own watch list, not threat evidence, so
+  // they stay out of the risk distribution, risk score and threat sources.
+  const threats = visibleFlagged.filter((email) => email.flagReason !== 'keyword');
+  const threatCount = threats.length;
   const totalReleased = releasedEmails.length || input.releasedCount || 0;
   const totalProcessed = totalFlagged + totalReleased;
-  const criticalCount = visibleFlagged.filter((email) => email.riskLevel === 'Critical').length;
-  const highCount = visibleFlagged.filter((email) => email.riskLevel === 'High').length;
-  const mediumCount = visibleFlagged.filter((email) => email.riskLevel === 'Medium').length;
-  const lowCount = visibleFlagged.filter((email) => email.riskLevel === 'Low').length;
+  const criticalCount = threats.filter((email) => email.riskLevel === 'Critical').length;
+  const highCount = threats.filter((email) => email.riskLevel === 'High').length;
+  const mediumCount = threats.filter((email) => email.riskLevel === 'Medium').length;
+  const lowCount = threats.filter((email) => email.riskLevel === 'Low').length;
   const totalRiskPoints =
     criticalCount * RISK_WEIGHTS.Critical +
     highCount * RISK_WEIGHTS.High +
     mediumCount * RISK_WEIGHTS.Medium +
     lowCount * RISK_WEIGHTS.Low;
-  const overallRiskScore = totalFlagged > 0 ? Math.round((totalRiskPoints / (totalFlagged * 100)) * 100) : 0;
+  const overallRiskScore = threatCount > 0 ? Math.round((totalRiskPoints / (threatCount * 100)) * 100) : 0;
   const domainCounts: Record<string, number> = {};
-  visibleFlagged.forEach((email) => {
+  threats.forEach((email) => {
     const domain = threatDomain(email);
     domainCounts[domain] = (domainCounts[domain] || 0) + 1;
   });
@@ -79,6 +88,8 @@ export function computeEmailStats(input: {
 
   return {
     totalFlagged,
+    threatCount,
+    keywordMatchCount: totalFlagged - threatCount,
     totalReleased,
     totalProcessed,
     criticalCount,
@@ -89,7 +100,7 @@ export function computeEmailStats(input: {
     keywordHits: visibleFlagged.filter((email) => hasVisibleKeywordHit(email, keywords, detectionActions)).length,
     typoHits: visibleFlagged.filter((email) => hasVisibleTypoHit(email, keywords, detectionActions)).length,
     overallRiskScore,
-    detectionRate: totalProcessed > 0 ? Math.round((totalFlagged / totalProcessed) * 100) : 0,
+    detectionRate: totalProcessed > 0 ? Math.round((threatCount / totalProcessed) * 100) : 0,
     topThreats: Object.entries(domainCounts).sort(([, a], [, b]) => b - a).slice(0, 5),
     recentReleased: releasedEmails.slice(0, 5),
     activeKeywords: keywords.filter((keyword) => keyword.enabled).length,

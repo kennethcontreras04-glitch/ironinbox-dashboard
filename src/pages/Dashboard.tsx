@@ -270,7 +270,7 @@ const Dashboard: React.FC = () => {
                   </div>
 
                   <p className="text-[11px] text-slate-400 text-center mt-3 dark:text-[var(--dm-text-muted)]">
-                    {stats.totalFlagged} flagged emails analyzed
+                    {stats.threatCount} flagged threat{stats.threatCount !== 1 ? 's' : ''} analyzed
                   </p>
                 </div>
               </div>
@@ -302,7 +302,7 @@ const Dashboard: React.FC = () => {
                       <div className={`w-full h-1.5 rounded-full overflow-hidden ${trackTint}`}>
                         <div
                           className={`${color} h-full rounded-full transition-all duration-1000`}
-                          style={{ width: `${stats.totalFlagged > 0 ? (count / stats.totalFlagged) * 100 : 0}%` }}
+                          style={{ width: `${stats.threatCount > 0 ? (count / stats.threatCount) * 100 : 0}%` }}
                         />
                       </div>
                     </div>
@@ -312,7 +312,8 @@ const Dashboard: React.FC = () => {
                     <div>
                       <p className="text-[10px] font-mono uppercase tracking-widest text-slate-400 dark:text-[var(--dm-text-muted)]">Detection Rate</p>
                       <p className="text-[11px] text-slate-400 mt-0.5 dark:text-[var(--dm-text-muted)]">
-                        {stats.totalFlagged} of {stats.totalProcessed} emails
+                        {stats.threatCount} of {stats.totalProcessed} emails
+                        {stats.keywordMatchCount > 0 && ` · plus ${stats.keywordMatchCount} keyword match${stats.keywordMatchCount !== 1 ? 'es' : ''}, not counted as threats`}
                       </p>
                     </div>
                     <span className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400">
@@ -359,7 +360,7 @@ const Dashboard: React.FC = () => {
                           <p className="text-[10px] text-slate-400 dark:text-[var(--dm-text-muted)]">{count} threat{count !== 1 ? 's' : ''}</p>
                         </div>
                         <span className="text-xs font-mono font-bold text-slate-300 dark:text-[var(--dm-text-mono)]">
-                          {Math.round((count / stats.totalFlagged) * 100)}%
+                          {Math.round((count / Math.max(1, stats.threatCount)) * 100)}%
                         </span>
                       </div>
                     ))}

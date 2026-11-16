@@ -215,7 +215,13 @@ const FlaggedEmails: React.FC = () => {
                       </td>
                     </tr>
                   ) : paginatedEmails.map((email, idx) => {
-                    const signals = getVisibleSignals(email, keywords, detectionActions);
+                    const keywordOnly = email.flagReason === 'keyword';
+                    // For keyword matches, show the matched keyword first.
+                    // One chip per value (a phrase rule and a keyword can both find "gift card").
+                    const signals = [...getVisibleSignals(email, keywords, detectionActions)]
+                      .filter((signal, index, all) => all.findIndex((other) => other.value === signal.value) === index)
+                      .sort((a, b) =>
+                      keywordOnly ? Number(b.detector === 'user-keyword') - Number(a.detector === 'user-keyword') : 0);
                     const linkedIncident = incidentForEmail(incidents, email.id);
                     const riskDot = email.riskLevel === 'Critical' ? 'bg-red-500 animate-pulse' : email.riskLevel === 'High' ? 'bg-orange-500' : email.riskLevel === 'Medium' ? 'bg-amber-500' : 'bg-blue-500';
                     return (
@@ -274,6 +280,12 @@ const FlaggedEmails: React.FC = () => {
                             <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${riskDot}`} />
                             {email.riskLevel.toUpperCase()}
                           </span>
+                          {keywordOnly && (
+                            <span title="Flagged because it matches a monitored keyword. Keywords don't change the risk score."
+                              className="mt-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold font-mono border bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800/60">
+                              <RiKeyLine className="w-2.5 h-2.5" />KEYWORD MATCH
+                            </span>
+                          )}
                         </td>
 
                         <td className="px-4 py-3">
