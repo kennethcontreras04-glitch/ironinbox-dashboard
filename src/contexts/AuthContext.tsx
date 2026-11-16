@@ -7,7 +7,16 @@ export interface AccountIntegration {
   id: string; provider: IntegrationProvider; connected: boolean; accountEmail: string;
   monitoring: boolean; lastSyncedAt: string | null;
 }
-interface AppUser {uid: string; email: string; displayName: string; photoURL: string; loginProvider: IntegrationProvider | 'password' | 'supabase';}
+export type UserRole = 'admin' | 'manager' | 'viewer';
+
+export interface AppUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL: string;
+  loginProvider: IntegrationProvider | 'password' | 'supabase';
+  role: UserRole;
+}
 interface Status extends AppUser { mailboxes: AccountIntegration[]; }
 export interface AuthContextType {
   user: AppUser | null; monitoredEmail: string | null; loading: boolean;
@@ -39,8 +48,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (response.status === 401) { setUser(null); setAccounts([]); return; }
     const data = await response.json() as Status & { error?: string };
     if (!response.ok) throw new Error(data.error || 'Unable to load your accounts.');
-    setUser(previous => previous?.uid === data.uid ? previous : { uid: data.uid, email: data.email,
-      displayName: data.displayName, photoURL: '', loginProvider: data.loginProvider });
+    setUser({
+  uid: data.uid,
+  email: data.email,
+  displayName: data.displayName,
+  photoURL: '',
+  loginProvider: data.loginProvider,
+  role: data.role,
+});
     setAccounts(data.mailboxes);
   };
   useEffect(() => {
@@ -49,7 +64,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!response.ok) return;
       const data = await response.json() as Status;
       if (active) {
-        setUser({ uid: data.uid, email: data.email, displayName: data.displayName, photoURL: '', loginProvider: data.loginProvider });
+        setUser({
+  uid: data.uid,
+  email: data.email,
+  displayName: data.displayName,
+  photoURL: '',
+  loginProvider: data.loginProvider,
+  role: data.role,
+});
         setAccounts(data.mailboxes);
       }
     }).catch(() => { /* Login remains available when the API is unavailable. */ })

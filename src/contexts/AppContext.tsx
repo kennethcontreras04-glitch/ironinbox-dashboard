@@ -195,9 +195,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const syncInFlight = useRef(false);
   const syncQueued = useRef(false);
   const syncMailbox = async () => {
-    const snapshot = gradingRef.current;
-    const currentUser = snapshot.user;
-    if (!currentUser?.uid) return;
+  const snapshot = gradingRef.current;
+  const currentUser = snapshot.user;
+
+  if (!currentUser?.uid || currentUser.role === 'viewer') return;
     if (syncInFlight.current) { syncQueued.current = true; return; }
     syncInFlight.current = true;
     setMailboxSyncing(true);
@@ -243,9 +244,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Re-grade already-synced mail on the server with the current keywords,
   // options and sensitivity. No Gmail/Outlook calls, so changes apply at once.
   const regradeMailbox = async () => {
-    const snapshot = gradingRef.current;
-    const currentUser = snapshot.user;
-    if (!currentUser?.uid) return;
+  const snapshot = gradingRef.current;
+  const currentUser = snapshot.user;
+
+  if (!currentUser?.uid || currentUser.role === 'viewer') return;
     // A sync in progress would save the settings it started with; re-grade after it.
     if (syncInFlight.current) { regradeQueued.current = true; return; }
     setSensitivityStatus('applying');
@@ -266,8 +268,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   regradeRef.current = regradeMailbox;
 
   const persistWorkspace = async () => {
-    const currentUser = gradingRef.current.user;
-    if (!currentUser?.uid || hydratingRef.current) return;
+  const currentUser = gradingRef.current.user;
+
+  if (!currentUser?.uid || currentUser.role === 'viewer' || hydratingRef.current) return;
     const payload: WorkspacePayload = {
       keywords: gradingRef.current.keywords,
       detectionOptions: gradingRef.current.detectionOptions,
@@ -328,7 +331,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     setReadNotificationIds(loadNotificationReadIds(user.uid));
 
-    const local = readLocalWorkspace(user.uid);
+    const local = user.role === 'viewer'
+  ? null
+  : readLocalWorkspace(user.uid);
     if (local) {
       setKeywords(local.keywords.length ? local.keywords : defaultKeywords);
       if (local.detectionOptions) setDetectionOptions({ ...DEFAULT_OPTIONS, ...local.detectionOptions });
@@ -354,7 +359,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (data.detectionActions) setDetectionActions({ ...DEFAULT_ACTIONS, ...data.detectionActions });
           if (Number.isFinite(Number(data.riskThreshold))) setRiskFlagThreshold(Number(data.riskThreshold));
           if (Array.isArray(data.incidents)) setIncidents(data.incidents);
-          writeLocalWorkspace(user.uid, {
+          if (user.role !== 'viewer') writeLocalWorkspace(user.uid, {
             keywords: Array.isArray(data.keywords) ? data.keywords : defaultKeywords,
             detectionOptions: { ...DEFAULT_OPTIONS, ...data.detectionOptions },
             detectionActions: { ...DEFAULT_ACTIONS, ...data.detectionActions },

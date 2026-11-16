@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../contexts/useApp';
 import { computeEmailStats } from '../utils/emailStats';
 import { generatePDFReport } from '../utils/pdfExport';
@@ -26,11 +26,119 @@ import {
   RiLinksLine,
   RiFlag2Line,
 } from 'react-icons/ri';
+import { useAuth } from '../contexts/useAuth';
 
 const Dashboard: React.FC = () => {
   const { flaggedEmails, releasedEmails, keywords, incidents, detectionActions, syncMailbox, mailboxSyncing, mailboxError, lastSyncedAt } = useApp();
   const { advanced, alertBehavior } = useSettings();
   const { role } = useRole();
+  const { user } = useAuth();
+const isSupabaseUser = user?.loginProvider === 'supabase';
+
+
+const [demoStats, setDemoStats] = useState<{
+  totalProcessed: number;
+  totalReleased: number;
+  totalFlagged: number;
+  criticalCount: number;
+  threatCount: number;
+  keywordMatchCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  highCritical: number;
+  keywordHits: number;
+  typoHits: number;
+  overallRiskScore: number;
+  detectionRate: number;
+  activeKeywords: number;
+  totalIncidents: number;
+  openIncidents: number;
+  incidentsLinkedToEmails: number;
+  flaggedEmailsEscalated: number;
+} | null>(null);
+
+
+
+const [demoStatsLoading, setDemoStatsLoading] = useState(false);
+const [demoStatsError, setDemoStatsError] = useState<string | null>(null);
+
+useEffect(() => {
+  if (!user || !isSupabaseUser) {
+    return;
+  }
+
+  let active = true;
+
+  const loadDemoStats = async () => {
+    setDemoStats(null);
+    setDemoStatsLoading(true);
+    setDemoStatsError(null);
+  };
+
+  void loadDemoStats();
+
+  void fetch('/api/demo/stats')
+    .then(async response => {
+      if (response.status === 403) {
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error('Unable to load demo statistics.');
+      }
+
+      
+const data = await response.json() as {
+  demo: boolean;
+  stats: {
+    totalProcessed: number;
+    totalReleased: number;
+    totalFlagged: number;
+    criticalCount: number;
+    threatCount: number;
+    keywordMatchCount: number;
+    highCount: number;
+    mediumCount: number;
+    lowCount: number;
+    highCritical: number;
+    keywordHits: number;
+    typoHits: number;
+    overallRiskScore: number;
+    detectionRate: number;
+    activeKeywords: number;
+    totalIncidents: number;
+    openIncidents: number;
+    incidentsLinkedToEmails: number;
+    flaggedEmailsEscalated: number;
+  };
+};
+
+
+      if (!data.demo) {
+        throw new Error('Invalid demo statistics response.');
+      }
+
+      return data.stats;
+    })
+    .then(stats => {
+      if (active) setDemoStats(stats);
+    })
+    .catch(() => {
+      if (active) {
+        setDemoStats(null);
+        setDemoStatsError('Demo statistics could not be loaded.');
+      }
+    })
+    .finally(() => {
+      if (active) setDemoStatsLoading(false);
+    });
+
+  return () => {
+    active = false;
+  };
+}, [user?.uid, isSupabaseUser]);
+
   const [lastRefresh] = useState(() => new Date());
 
   useEngagementTracker('dashboard');
@@ -40,6 +148,21 @@ const Dashboard: React.FC = () => {
     [flaggedEmails, releasedEmails, keywords, incidents, detectionActions]
   );
 
+const isDemoAdmin = role === 'admin' && demoStats !== null;
+const displayStats = isDemoAdmin
+  ? { ...stats, ...demoStats }
+  : stats;
+  const demoTopThreats: [string, number][] = [
+  ['phishing-demo.example', 15],
+  ['malware-demo.example', 10],
+  ['spoofing-demo.example', 8],
+  ['suspicious-demo.example', 6],
+];
+
+const displayTopThreats = isDemoAdmin
+  ? demoTopThreats
+  : stats.topThreats;
+
   const getRiskInfo = (score: number) => {
     if (score >= 75) return { level: 'Critical', color: 'text-red-500', stroke: '#ef4444', bg: 'bg-red-950/40', border: 'border-red-800/60', badge: 'bg-red-50 text-red-800 border border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-900' };
     if (score >= 50) return { level: 'High', color: 'text-orange-500', stroke: '#f97316', bg: 'bg-orange-950/40', border: 'border-orange-800/60', badge: 'bg-orange-50 text-orange-900 border border-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:border-orange-900' };
@@ -47,7 +170,7 @@ const Dashboard: React.FC = () => {
     return { level: 'Low', color: 'text-emerald-500', stroke: '#10b981', bg: 'bg-emerald-950/40', border: 'border-emerald-800/60', badge: 'bg-emerald-50 text-emerald-900 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-900' };
   };
 
-  const riskInfo = getRiskInfo(stats.overallRiskScore);
+  const riskInfo = getRiskInfo(displayStats.overallRiskScore);
 
   /* shared card class */
   const card = 'bg-white border border-slate-200 rounded-xl shadow-sm dark:bg-[var(--dm-surface-popover)] dark:border-[var(--dm-border)]';
@@ -56,7 +179,8 @@ const Dashboard: React.FC = () => {
   return (
     <div className="flex-1 overflow-auto bg-slate-50 dark:bg-[var(--dm-bg-page)]">
       <Header title="Dashboard Overview" actionNode={
-        <div className="flex items-center gap-2">
+  role !== 'viewer' ? (
+    <div className="flex items-center gap-2">
           <button
             onClick={() => generatePDFReport(flaggedEmails, keywords, { releasedCount: releasedEmails.length, incidents, detectionActions })}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-700">
@@ -68,8 +192,9 @@ const Dashboard: React.FC = () => {
             <RiRefreshLine className={`w-3.5 h-3.5 ${mailboxSyncing ? 'animate-spin' : ''}`} />
             {mailboxSyncing ? 'Syncing…' : 'Sync mailboxes'}
           </button>
-        </div>
-      } />
+            </div>
+  ) : null
+} />
 
       <div className="p-6 space-y-6 animate-fade-in max-w-7xl mx-auto">
 
@@ -95,7 +220,9 @@ const Dashboard: React.FC = () => {
 
         {alertBehavior.showDashboardAlerts &&
           alertBehavior.highlightFlaggedInbox &&
-          stats.criticalCount > 0 && (
+          (role === 'viewer'
+  ? (demoStats?.criticalCount ?? 0)
+  : stats.criticalCount) > 0 && (
           <div
             className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50/90
                        dark:bg-red-950/25 dark:border-red-900/50"
@@ -107,7 +234,7 @@ const Dashboard: React.FC = () => {
             <div className="min-w-0 pt-0.5">
               <p className="text-sm font-semibold text-red-900 dark:text-red-200">Critical risk on the dashboard</p>
               <p className="text-xs text-red-800/80 dark:text-red-300/90 mt-0.5">
-                {stats.criticalCount} flagged message{stats.criticalCount !== 1 ? 's are' : ' is'} rated Critical.
+                {role === 'viewer' ? (demoStats?.criticalCount ?? 0) : stats.criticalCount} flagged message{(role === 'viewer' ? (demoStats?.criticalCount ?? 0) : stats.criticalCount) !== 1 ? 's are' : ' is'} rated Critical.
                 {role === 'viewer'
                   ? ' Your security team reviews these items.'
                   : ' Review them in Flagged Emails.'}
@@ -117,11 +244,34 @@ const Dashboard: React.FC = () => {
         )}
 
         {/* Viewer-only compact dashboard */}
+        {role === 'viewer' && (
+  <div className="px-4 py-3 rounded-lg border border-blue-200 bg-blue-50 text-sm text-blue-800">
+    {demoStatsLoading
+      ? 'Loading demo statistics...'
+      : demoStatsError
+        ? demoStatsError
+        : demoStats
+          ? `Demo dataset loaded: ${demoStats.totalProcessed} emails processed, ${demoStats.totalReleased} released.`
+          : 'Demo statistics are unavailable for this account.'}
+  </div>
+)}
         {role === 'viewer' ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <StatCard title="Total Processed"  value={stats.totalProcessed}  icon={<RiMailLine />}        iconColor="text-blue-600"    />
-              <StatCard title="Emails Released"  value={stats.totalReleased}   icon={<RiShieldCheckLine />} iconColor="text-emerald-600" />
+              
+<StatCard
+  title="Total Processed"
+  value={demoStats?.totalProcessed ?? 0}
+  icon={<RiMailLine />}
+  iconColor="text-blue-600"
+/>
+<StatCard
+  title="Emails Released"
+  value={demoStats?.totalReleased ?? 0}
+  icon={<RiShieldCheckLine />}
+  iconColor="text-emerald-600"
+/>
+
             </div>
 
             <div className={`${card} p-6`}>
@@ -157,54 +307,28 @@ const Dashboard: React.FC = () => {
             </div>
 
             {/* Recent Activity — viewers can see this */}
-            <div className={`${card} p-6`}>
-              <p className={cardHead}>
-                <RiTimeLine className="w-3.5 h-3.5" />
-                Recent Activity
-              </p>
-              {stats.recentReleased.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 text-slate-400 dark:text-[var(--dm-text-muted)]">
-                  <RiMailLine className="w-10 h-10 mb-3 text-slate-300 dark:text-[var(--dm-chrome)]" />
-                  <p className="text-sm font-medium">No released emails yet</p>
-                </div>
-              ) : (
-                <div className="space-y-2 mt-5">
-                  {stats.recentReleased.map((released) => (
-                    <div key={released.id}
-                         className="flex items-start space-x-3 px-3 py-3 rounded-lg border transition-colors
-                                    bg-slate-50 border-slate-100 dark:bg-[var(--dm-bg-elevated)] dark:border-[var(--dm-border)]">
-                      <div className="w-7 h-7 rounded flex items-center justify-center flex-shrink-0
-                                      bg-emerald-100 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
-                        <RiShieldCheckLine className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-slate-800 truncate dark:text-[var(--dm-text-primary)]">
-                          {released.originalEmail.subject}
-                        </p>
-                        <p className="text-[10px] text-slate-400 font-mono truncate mt-0.5 dark:text-[var(--dm-text-muted)]">
-                          {released.originalEmail.sender}
-                        </p>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="flex items-center text-[10px] text-slate-400 dark:text-[var(--dm-text-muted)]">
-                            <RiUserLine className="w-3 h-3 mr-1" />{released.releasedBy}
-                          </span>
-                          <span className="flex items-center text-[10px] text-slate-400 font-mono dark:text-[var(--dm-text-muted)]">
-                            <RiTimeLine className="w-3 h-3 mr-1" />{released.releasedAt}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            
+{/* Viewer activity summary — no individual email details */}
+<div className={`${card} p-6`}>
+  <p className={cardHead}>
+    <RiTimeLine className="w-3.5 h-3.5" />
+    Activity Summary
+  </p>
+
+  <p className="mt-3 text-xs text-slate-500 dark:text-[var(--dm-text-muted)]">
+    This dashboard displays general security statistics.
+    Individual email messages, sender information, and
+    mailbox activity are restricted to authorized personnel.
+  </p>
+</div>
+
           </div>
         ) : (
         <div className="space-y-6">
 
         {/* Hero Stats */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="Total Processed"    value={stats.totalProcessed}    icon={<RiMailLine />}        iconColor="text-blue-600"    />
+          <StatCard title="Total Processed"    value={isDemoAdmin ? demoStats.totalProcessed : stats.totalProcessed}    icon={<RiMailLine />}        iconColor="text-blue-600"    />
           <div
             className={
               alertBehavior.highlightFlaggedInbox && stats.totalFlagged > 0
@@ -212,16 +336,16 @@ const Dashboard: React.FC = () => {
                 : undefined
             }
           >
-            <StatCard title="Currently Flagged"  value={stats.totalFlagged}      icon={<RiAlertLine />}       iconColor="text-red-600"     />
+            <StatCard title="Currently Flagged"  value={isDemoAdmin ? demoStats.totalFlagged : stats.totalFlagged}      icon={<RiAlertLine />}       iconColor="text-red-600"     />
           </div>
-          <StatCard title="Emails Released"    value={stats.totalReleased}     icon={<RiShieldCheckLine />} iconColor="text-emerald-600" />
-          <StatCard title="Active Keywords"    value={stats.activeKeywords}    icon={<RiSpamLine />}        iconColor="text-purple-600"  />
+          <StatCard title="Emails Released"    value={isDemoAdmin ? demoStats.totalReleased : stats.totalReleased}     icon={<RiShieldCheckLine />} iconColor="text-emerald-600" />
+          <StatCard title="Active Keywords"    value={isDemoAdmin ? demoStats.activeKeywords : stats.activeKeywords}    icon={<RiSpamLine />}        iconColor="text-purple-600"  />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard title="Open Incidents" value={stats.openIncidents} icon={<RiFileList3Line />} iconColor="text-orange-600" />
-          <StatCard title="Incidents Linked to Emails" value={stats.incidentsLinkedToEmails} icon={<RiLinksLine />} iconColor="text-blue-600" />
-          <StatCard title="Flagged Emails Escalated" value={stats.flaggedEmailsEscalated} icon={<RiFlag2Line />} iconColor="text-red-600" />
+          <StatCard title="Open Incidents" value={isDemoAdmin ? demoStats.openIncidents : stats.openIncidents} icon={<RiFileList3Line />} iconColor="text-orange-600" />
+          <StatCard title="Incidents Linked to Emails" value={isDemoAdmin ? demoStats.incidentsLinkedToEmails : stats.incidentsLinkedToEmails} icon={<RiLinksLine />} iconColor="text-blue-600" />
+          <StatCard title="Flagged Emails Escalated" value={isDemoAdmin ? demoStats.flaggedEmailsEscalated : stats.flaggedEmailsEscalated} icon={<RiFlag2Line />} iconColor="text-red-600" />
         </div>
 
         <RoleGate permission="canViewFlaggedEmails">
@@ -250,13 +374,13 @@ const Dashboard: React.FC = () => {
                         cx="50" cy="50" r="40" fill="none"
                         stroke={riskInfo.stroke}
                         strokeWidth="6" strokeLinecap="round"
-                        strokeDasharray={`${(stats.overallRiskScore / 100) * 251.2} 251.2`}
+                        strokeDasharray={`${(displayStats.overallRiskScore / 100) * 251.2} 251.2`}
                         style={{ transition: 'stroke-dasharray 1s ease-in-out' }}
                       />
                     </svg>
                     <div className="absolute inset-0 flex flex-col items-center justify-center">
                       <span className={`text-4xl font-black tracking-tight dark:font-mono ${riskInfo.color}`}>
-                        {stats.overallRiskScore}
+                        {displayStats.overallRiskScore}
                       </span>
                       <span className="text-[9px] font-mono uppercase tracking-widest text-slate-400 dark:text-[var(--dm-text-muted)] mt-1">
                         Score
@@ -270,7 +394,7 @@ const Dashboard: React.FC = () => {
                   </div>
 
                   <p className="text-[11px] text-slate-400 text-center mt-3 dark:text-[var(--dm-text-muted)]">
-                    {stats.threatCount} flagged threat{stats.threatCount !== 1 ? 's' : ''} analyzed
+                    {displayStats.threatCount} flagged threat{displayStats.threatCount !== 1 ? 's' : ''} analyzed
                   </p>
                 </div>
               </div>
@@ -284,10 +408,10 @@ const Dashboard: React.FC = () => {
 
                 <div className="space-y-5 mt-6">
                   {[
-                    { label: 'Critical', count: stats.criticalCount, color: 'bg-red-500',    trackTint: 'bg-red-500/12 dark:bg-red-500/22' },
-                    { label: 'High',     count: stats.highCount,     color: 'bg-orange-500', trackTint: 'bg-orange-500/12 dark:bg-orange-500/22' },
-                    { label: 'Medium',   count: stats.mediumCount,   color: 'bg-amber-500',  trackTint: 'bg-amber-500/12 dark:bg-amber-500/22' },
-                    { label: 'Low',      count: stats.lowCount,      color: 'bg-emerald-500', trackTint: 'bg-emerald-500/12 dark:bg-emerald-500/22' },
+                    { label: 'Critical', count: displayStats.criticalCount, color: 'bg-red-500',    trackTint: 'bg-red-500/12 dark:bg-red-500/22' },
+                    { label: 'High',     count: displayStats.highCount,     color: 'bg-orange-500', trackTint: 'bg-orange-500/12 dark:bg-orange-500/22' },
+                    { label: 'Medium',   count: displayStats.mediumCount,   color: 'bg-amber-500',  trackTint: 'bg-amber-500/12 dark:bg-amber-500/22' },
+                    { label: 'Low',      count: displayStats.lowCount,      color: 'bg-emerald-500', trackTint: 'bg-emerald-500/12 dark:bg-emerald-500/22' },
                   ].map(({ label, count, color, trackTint }) => (
                     <div key={label}>
                       <div className="flex items-center justify-between mb-2">
@@ -302,7 +426,7 @@ const Dashboard: React.FC = () => {
                       <div className={`w-full h-1.5 rounded-full overflow-hidden ${trackTint}`}>
                         <div
                           className={`${color} h-full rounded-full transition-all duration-1000`}
-                          style={{ width: `${stats.threatCount > 0 ? (count / stats.threatCount) * 100 : 0}%` }}
+                          style={{ width: `${displayStats.threatCount > 0 ? (count / displayStats.threatCount) * 100 : 0}%` }}
                         />
                       </div>
                     </div>
@@ -312,12 +436,12 @@ const Dashboard: React.FC = () => {
                     <div>
                       <p className="text-[10px] font-mono uppercase tracking-widest text-slate-400 dark:text-[var(--dm-text-muted)]">Detection Rate</p>
                       <p className="text-[11px] text-slate-400 mt-0.5 dark:text-[var(--dm-text-muted)]">
-                        {stats.threatCount} of {stats.totalProcessed} emails
-                        {stats.keywordMatchCount > 0 && ` · plus ${stats.keywordMatchCount} keyword match${stats.keywordMatchCount !== 1 ? 'es' : ''}, not counted as threats`}
+                        {displayStats.threatCount} of {displayStats.totalProcessed} emails
+                        {displayStats.keywordMatchCount > 0 && ` · plus ${displayStats.keywordMatchCount} keyword match${displayStats.keywordMatchCount !== 1 ? 'es' : ''}, not counted as threats`}
                       </p>
                     </div>
                     <span className="text-2xl font-black font-mono text-blue-600 dark:text-blue-400">
-                      {stats.detectionRate}%
+                      {displayStats.detectionRate}%
                     </span>
                   </div>
                 </div>
@@ -336,14 +460,14 @@ const Dashboard: React.FC = () => {
                   Top Threat Sources
                 </p>
 
-                {stats.topThreats.length === 0 ? (
+                {displayTopThreats.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-[var(--dm-text-muted)]">
                     <RiShieldCheckLine className="w-12 h-12 mb-3 text-emerald-400/50" />
                     <p className="text-sm font-medium">No threats detected</p>
                   </div>
                 ) : (
                   <div className="space-y-2 mt-5">
-                    {stats.topThreats.map(([domain, count], index) => (
+                    {displayTopThreats.map(([domain, count], index) => (
                       <div key={domain}
                            className="flex items-center space-x-3 px-3 py-3 rounded-lg border transition-colors
                                       bg-slate-50 border-slate-100 hover:border-slate-200
@@ -360,7 +484,7 @@ const Dashboard: React.FC = () => {
                           <p className="text-[10px] text-slate-400 dark:text-[var(--dm-text-muted)]">{count} threat{count !== 1 ? 's' : ''}</p>
                         </div>
                         <span className="text-xs font-mono font-bold text-slate-300 dark:text-[var(--dm-text-mono)]">
-                          {Math.round((count / Math.max(1, stats.threatCount)) * 100)}%
+                          {Math.round((count / Math.max(1, displayStats.threatCount)) * 100)}%
                         </span>
                       </div>
                     ))}
@@ -376,7 +500,28 @@ const Dashboard: React.FC = () => {
                   Recent Activity
                 </p>
 
-                {stats.recentReleased.length === 0 ? (
+                {isDemoAdmin ? (
+  <div className="space-y-3 mt-5">
+    <div className="rounded-lg bg-slate-50 dark:bg-[var(--dm-bg-elevated)] p-4">
+      <p className="text-sm font-semibold">
+        Demo Email Processing Summary
+      </p>
+      <p className="text-xs text-slate-500 mt-2">
+        {demoStats?.totalProcessed ?? 0} emails processed
+      </p>
+      <p className="text-xs text-slate-500 mt-1">
+        {demoStats?.totalReleased ?? 0} emails released
+      </p>
+      <p className="text-xs text-slate-500 mt-1">
+        {demoStats?.totalFlagged ?? 0} emails flagged
+      </p>
+    </div>
+    <p className="text-xs text-slate-400">
+      Synthetic demonstration data. No real mailbox activity is displayed.
+    </p>
+    </div>
+) : (
+  stats.recentReleased.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-slate-400 dark:text-[var(--dm-text-muted)]">
                     <RiMailLine className="w-12 h-12 mb-3 text-slate-300 dark:text-[var(--dm-chrome)]" />
                     <p className="text-sm font-medium">No released emails yet</p>
@@ -411,7 +556,8 @@ const Dashboard: React.FC = () => {
                       </div>
                     ))}
                   </div>
-                )}
+                )
+              )}
               </div>
             </div>
           </>

@@ -444,3 +444,307 @@ test('regrade applies new sensitivity to synced mail instantly without calling t
   assert.equal((await s.request('/api/emails', 'GET', cookie)).jsonBody.messages[0].disposition, 'flagged');
   assert.equal((await s.request('/api/emails/regrade', 'POST', cookie, { threshold: 0 }, 'https://attacker.example')).status, 403);
 });
+
+
+test('viewer cannot access protected API operations', async () => {
+  const s = setup();
+  const { cookie } = await s.oauth();
+  const account = await s.status(cookie);
+
+  const userKey = `users/${account.uid}`;
+  const stored = s.records.get(userKey);
+
+  assert.ok(stored, 'User record must exist');
+
+  const user = decrypted(stored);
+  user.role = 'viewer';
+  stored.value = encrypted(user);
+
+  const status = await s.status(cookie);
+  assert.equal(status.role, 'viewer');
+
+  const requests = [
+    ['/api/emails', 'GET', {}],
+    ['/api/mailboxes/sync', 'POST', {}],
+    ['/api/emails/regrade', 'POST', {}],
+    ['/api/emails/disposition', 'POST', {}],
+    ['/api/workspace', 'POST', {}],
+    ['/api/data/wipe', 'POST', {}],
+  ];
+
+  for (const [path, method, body] of requests) {
+    const response = await s.request(path, method, cookie, body);
+
+    assert.equal(
+      response.status,
+      403,
+      `${method} ${path} should reject Viewer access`
+    );
+  }
+
+  const workspace = await s.request('/api/workspace', 'GET', cookie);
+  assert.equal(workspace.status, 403);
+});
+
+
+test('viewer accesses only authorized sanitized demo incidents', async () => {
+  const s = setup();
+
+  const adminLogin = await s.oauth('gmail', 'login', '', 'demo-admin');
+  const viewerLogin = await s.oauth('gmail', 'login', '', 'demo-viewer');
+
+  const admin = await s.status(adminLogin.cookie);
+  const viewer = await s.status(viewerLogin.cookie);
+
+  const adminKey = `users/${admin.uid}`;
+  const viewerKey = `users/${viewer.uid}`;
+
+  const adminRecord = s.records.get(adminKey);
+  const viewerRecord = s.records.get(viewerKey);
+
+  assert.ok(adminRecord);
+  assert.ok(viewerRecord);
+
+  const adminUser = decrypted(adminRecord);
+  const viewerUser = decrypted(viewerRecord);
+
+  adminUser.demoViewers = [viewer.uid];
+  adminUser.workspace = {
+    incidents: [{
+      id: 'private-incident-id',
+      createdTime: '2026-11-16',
+      priority: 'High',
+      status: 'Open',
+      category: 'Confidential Category',
+      source: 'private@example.com',
+      subject: 'Sensitive security incident',
+      description: 'Private investigation details',
+      reporter: 'Private Employee',
+      assignedTo: 'Security Analyst',
+      dueDate: '2026-11-20',
+      sourceEmailId: 'private-email-id',
+      sourceEmail: {
+        sender: 'private@example.com',
+        subject: 'Confidential message',
+        content: 'Sensitive email body'
+      }
+    }]
+  };
+
+  viewerUser.role = 'viewer';
+  viewerUser.demoMembership = {
+    role: 'viewer',
+    ownerUid: admin.uid
+  };
+
+  adminRecord.value = encrypted(adminUser);
+  viewerRecord.value = encrypted(viewerUser);
+
+  const response = await s.request(
+    '/api/workspace',
+    'GET',
+    viewerLogin.cookie
+  );
+
+  assert.equal(response.status, 200);
+assert.equal(response.jsonBody.saved, true);
+assert.equal(response.jsonBody.readOnly, true);
+assert.equal(response.jsonBody.incidents.length, 15);
+
+assert.equal(
+  response.jsonBody.incidents.filter(
+    incident => incident.status === 'Open'
+  ).length,
+  7
+);
+
+for (const incident of response.jsonBody.incidents) {
+  assert.equal(incident.subject, 'Restricted incident');
+  assert.equal(incident.source, 'Restricted');
+  assert.equal(incident.reporter, 'Restricted');
+  assert.equal(incident.assignedTo, 'Restricted');
+  assert.equal(incident.sourceEmail, undefined);
+}
+assert.deepEqual(response.jsonBody.keywords, []);
+assert.deepEqual(response.jsonBody.detectionOptions, {});
+assert.deepEqual(response.jsonBody.detectionActions, {});
+
+  const serialized = JSON.stringify(response.jsonBody);
+
+  for (const secret of [
+    'private@example.com',
+    'Sensitive security incident',
+    'Private investigation details',
+    'Private Employee',
+    'Confidential message',
+    'Sensitive email body',
+    'private-incident-id'
+  ]) {
+    assert.equal(
+      serialized.includes(secret),
+      false,
+      `Viewer response must not contain: ${secret}`
+    );
+  }
+
+  adminUser.demoViewers = [];
+  adminRecord.value = encrypted(adminUser);
+
+  const revoked = await s.request(
+    '/api/workspace',
+    'GET',
+    viewerLogin.cookie
+  );
+
+  assert.equal(revoked.status, 403);
+});
+
+
+test('demo statistics require authorization and contain no email details', async () => {
+  const s = setup();
+
+  const adminLogin = await s.oauth('gmail', 'login', '', 'stats-admin');
+  const viewerLogin = await s.oauth('gmail', 'login', '', 'stats-viewer');
+  const otherLogin = await s.oauth('gmail', 'login', '', 'stats-other');
+
+  const admin = await s.status(adminLogin.cookie);
+  const viewer = await s.status(viewerLogin.cookie);
+
+  const getStats = cookie => s.request('/api/demo/stats', 'GET', cookie);
+
+  assert.equal((await getStats('')).status, 401);
+  assert.equal((await getStats(adminLogin.cookie)).status, 403);
+  assert.equal((await getStats(viewerLogin.cookie)).status, 403);
+  assert.equal((await getStats(otherLogin.cookie)).status, 403);
+
+  const adminRecord = s.records.get(`users/${admin.uid}`);
+  const viewerRecord = s.records.get(`users/${viewer.uid}`);
+
+  const adminUser = decrypted(adminRecord);
+  const viewerUser = decrypted(viewerRecord);
+
+  adminUser.demoAccess = true;
+  adminUser.demoViewers = [viewer.uid];
+
+  viewerUser.role = 'viewer';
+  viewerUser.demoMembership = {
+    role: 'viewer',
+    ownerUid: admin.uid
+  };
+
+  adminRecord.value = encrypted(adminUser);
+  viewerRecord.value = encrypted(viewerUser);
+
+  const adminResponse = await getStats(adminLogin.cookie);
+  const viewerResponse = await getStats(viewerLogin.cookie);
+
+  assert.equal(adminResponse.status, 200);
+  assert.equal(viewerResponse.status, 200);
+
+  assert.deepEqual(
+    adminResponse.jsonBody.stats,
+    viewerResponse.jsonBody.stats
+  );
+
+  assert.equal(adminResponse.jsonBody.demo, true);
+  assert.equal(adminResponse.jsonBody.stats.totalProcessed, 200);
+
+  for (const response of [adminResponse, viewerResponse]) {
+    const serialized = JSON.stringify(response.jsonBody);
+
+    for (const field of [
+      'topThreats',
+      'recentReleased',
+      'senderEmail',
+      'mailboxEmail',
+      'sourceEmail',
+      'accessToken',
+      'refreshToken'
+    ]) {
+      assert.equal(
+        serialized.includes(field),
+        false,
+        `Demo statistics must not expose ${field}`
+      );
+    }
+  }
+
+  adminUser.demoViewers = [];
+  adminRecord.value = encrypted(adminUser);
+
+  assert.equal((await getStats(viewerLogin.cookie)).status, 403);
+});
+
+
+test('demo admin sees synthetic incidents while regular admin retains private workspace', async () => {
+  const s = setup();
+
+  const login = await s.oauth('gmail', 'login', '', 'demo-admin-workspace');
+  const admin = await s.status(login.cookie);
+  const record = s.records.get(`users/${admin.uid}`);
+
+  assert.ok(record);
+
+  const user = decrypted(record);
+
+  user.workspace = {
+    incidents: [{
+      id: 'private-admin-incident',
+      subject: 'Confidential real incident',
+      priority: 'High',
+      status: 'Open'
+    }],
+    keywords: ['private-keyword']
+  };
+
+  record.value = encrypted(user);
+
+  const regularResponse = await s.request(
+    '/api/workspace',
+    'GET',
+    login.cookie
+  );
+
+  assert.equal(regularResponse.status, 200);
+  assert.equal(regularResponse.jsonBody.incidents.length, 1);
+  assert.equal(
+    regularResponse.jsonBody.incidents[0].subject,
+    'Confidential real incident'
+  );
+
+  const demoUser = decrypted(record);
+
+  demoUser.loginProvider = 'supabase';
+  demoUser.demoAccess = true;
+  demoUser.demoViewers = ['synthetic-viewer-id'];
+
+  record.value = encrypted(demoUser);
+
+  const demoResponse = await s.request(
+    '/api/workspace',
+    'GET',
+    login.cookie
+  );
+
+  assert.equal(demoResponse.status, 200);
+  assert.equal(demoResponse.jsonBody.readOnly, true);
+  assert.equal(demoResponse.jsonBody.incidents.length, 15);
+
+  assert.equal(
+    demoResponse.jsonBody.incidents.filter(
+      incident => incident.status === 'Open'
+    ).length,
+    7
+  );
+
+  assert.equal(
+    demoResponse.jsonBody.incidents[0].subject,
+    'Demo Security Incident 1'
+  );
+
+  const serialized = JSON.stringify(demoResponse.jsonBody);
+
+  assert.equal(serialized.includes('Confidential real incident'), false);
+  assert.equal(serialized.includes('private-keyword'), false);
+  assert.equal(serialized.includes('private-admin-incident'), false);
+});
