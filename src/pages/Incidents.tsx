@@ -40,6 +40,9 @@ const Incidents: React.FC = () => {
   const { incidents, flaggedEmails, releasedEmails, isWiped, upsertIncident, createManualIncident } = useApp();
   const { user } = useAuth();
   const { role } = useRole();
+  const isDemoReadOnly =
+  role === 'viewer' ||
+  (role === 'admin' && user?.loginProvider === 'supabase');
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const filterRef = useRef<HTMLDivElement>(null);
@@ -164,7 +167,7 @@ const Incidents: React.FC = () => {
   };
 
   const handleSaveIncident = () => {
-    if (!draftIncident) return;
+  if (isDemoReadOnly || !draftIncident) return;
     if (isCreating) {
       createManualIncident(draftIncident);
       setIncidentPage(1);
@@ -226,8 +229,9 @@ const Incidents: React.FC = () => {
       <Header
         title="Incidents"
         actionNode={
-          <button
-            onClick={openCreateIncidentModal}
+  !isDemoReadOnly ? (
+    <button
+      onClick={openCreateIncidentModal}
             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors
                        dark:bg-blue-700 dark:hover:bg-blue-800 dark:shadow-[0_0_20px_rgba(59,130,246,0.18)]"
           >
@@ -236,6 +240,7 @@ const Incidents: React.FC = () => {
             </svg>
             Report suspicious email
           </button>
+          ) : null
         }
       />
 
@@ -569,8 +574,9 @@ const Incidents: React.FC = () => {
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Subject</label>
                 <input
-                  type="text"
-                  value={draftIncident.subject}
+  type="text"
+  value={draftIncident.subject}
+  readOnly={isDemoReadOnly}
                   onChange={(e) => {
                     setSubjectTouched(true);
                     setDraftIncident({ ...draftIncident, subject: e.target.value });
@@ -583,8 +589,9 @@ const Incidents: React.FC = () => {
               <div>
                 <label className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400 dark:text-[var(--dm-text-faint)]">Description</label>
                 <textarea
-                  rows={3}
-                  value={draftIncident.description}
+  rows={3}
+  value={draftIncident.description}
+  readOnly={isDemoReadOnly}
                   onChange={(e) => {
                     setDescriptionTouched(true);
                     setDraftIncident({ ...draftIncident, description: e.target.value });
@@ -794,9 +801,9 @@ const Incidents: React.FC = () => {
               >
                 Cancel
               </button>
-              <button
-                onClick={handleSaveIncident}
-                disabled={!draftIncident.subject.trim() || reviewBlocked}
+             <button
+  onClick={handleSaveIncident}
+  disabled={isDemoReadOnly || !draftIncident.subject.trim() || reviewBlocked}
                 className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-700 dark:hover:bg-blue-800"
               >
                 {isCreating ? 'Submit report' : 'Save Changes'}

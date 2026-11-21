@@ -3,6 +3,9 @@ import { promisify } from 'node:util';
 import { SCHEMA_VERSION, presentStoredEmail } from './classify.mjs';
 import { createProviders } from './providers.mjs';
 import { createSupabaseAuth } from './supabaseAuth.mjs';
+import { normalizeRole, requirePermission, PERMISSIONS } from './rbac.mjs';
+import { publicDemoStats } from './demoStats.mjs';
+import { publicDemoIncidents } from './demoIncidents.mjs';
 
 const scrypt = promisify(scryptCallback);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -84,6 +87,36 @@ function sanitizeIncident(item) {
     sourceEmail: sanitizeIncidentEmail(item.sourceEmail),
   };
 }
+function publicViewerIncident(incident) {
+  return {
+    id: hash(String(incident.id)).slice(0, 24),
+    createdTime: 'Restricted',
+    priority: ['Critical', 'High', 'Medium', 'Low'].includes(incident.priority)
+      ? incident.priority
+      : 'Medium',
+    status: ['Open', 'In Progress', 'Resolved'].includes(incident.status)
+      ? incident.status
+      : 'Open',
+    category: 'Security Incident',
+    source: 'Restricted',
+    subject: 'Restricted incident',
+    description: 'Incident details are restricted for Viewer accounts.',
+    reporter: 'Restricted',
+    assignedTo: 'Restricted',
+    dueDate: '',
+  };
+}
+
+function publicViewerWorkspace(workspace) {
+  return {
+    incidents: (workspace?.incidents || []).map(publicViewerIncident),
+    riskThreshold: workspace?.riskThreshold ?? DEFAULT_THRESHOLD,
+    keywords: [],
+    detectionOptions: {},
+    detectionActions: {},
+    readOnly: true,
+  };
+}
 function parseWorkspace(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail(400, 'A JSON object is required.');
   if (body.keywords !== undefined && !Array.isArray(body.keywords)) throw fail(400, 'keywords must be an array.');
@@ -150,8 +183,57 @@ export function createHandler({ env, storage, fetcher = fetch }) {
   };
   const write = (key, value, etag) => storage.write(key, { encrypted: encrypt(value) }, etag);
   const redirect = (location, cookies = []) => ({ status: 302, headers: { Location: location, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }, cookies });
-  const newUser = (uid, profile, provider) => ({ uid, email: profile.email, displayName: profile.name || profile.email,
-    loginProvider: provider, loginSubject: profile.subject, mailboxes: {}, createdAt: new Date().toISOString() });
+  async function resolveWorkspaceOwner(user) {
+  const membership = user.demoMembership;
+
+  if (!membership) {
+    return {
+      owner: user,
+      shared: false,
+    };
+  }
+
+  if (
+    membership.role !== 'viewer' ||
+    typeof membership.ownerUid !== 'string' ||
+    !membership.ownerUid
+  ) {
+    throw fail(403, 'Invalid demo workspace membership.');
+  }
+
+  if (normalizeRole(user.role) !== 'viewer') {
+    throw fail(403, 'Demo membership does not match the user role.');
+  }
+
+  const ownerRecord = await read(`users/${membership.ownerUid}`);
+
+  if (!ownerRecord || normalizeRole(ownerRecord.value.role) !== 'admin') {
+    throw fail(403, 'Demo workspace is unavailable.');
+  }
+  const authorizedViewers = ownerRecord.value.demoViewers;
+
+if (
+  !Array.isArray(authorizedViewers) ||
+  !authorizedViewers.includes(user.uid)
+) {
+  throw fail(403, 'You are not authorized to access this demo workspace.');
+}
+
+  return {
+    owner: ownerRecord.value,
+    shared: true,
+  };
+}
+  const newUser = (uid, profile, provider) => ({
+  uid,
+  email: profile.email,
+  displayName: profile.name || profile.email,
+  loginProvider: provider,
+  loginSubject: profile.subject,
+  role: 'admin',
+  mailboxes: {},
+  createdAt: new Date().toISOString(),
+});
   async function identityUser(provider, profile, create = true) {
     const identityKey = `identities/${hash(`${provider}:${profile.subject}`)}`;
     let identity = await read(identityKey);
@@ -379,7 +461,15 @@ if (request.method === 'POST' &&
         if (!providers[provider].configured) throw fail(503, `${provider === 'gmail' ? 'Google' : 'Microsoft'} is not configured yet.`);
         const intent = path.includes('/auth/') ? 'login' : 'connect';
         const active = await sessionUser(cookies);
-        if (intent === 'connect' && !active) throw fail(401, 'Sign in before adding an email account.');
+
+          if (intent === 'connect') {
+          if (!active) throw fail(401, 'Sign in before adding an email account.');
+          requirePermission(active.user.value.role, PERMISSIONS.MANAGE_MONITORING);
+            if (active.user.value.demoAccess === true || active.user.value.demoMembership) {
+    throw fail(403, 'Demo accounts cannot connect real mailboxes.');
+  }
+          }
+
         const state = random();
         const browser = random();
         const verifier = random();
@@ -412,13 +502,28 @@ if (request.method === 'POST' &&
         const token = await providers[provider].redeem(url.searchParams.get('code'), state.value.verifier);
         const profile = await providers[provider].profile(token.access_token);
         if (callbackIntent === 'connect') {
-          if (state.value.expectedSubject && state.value.expectedSubject !== profile.subject) throw fail(400, 'Choose the account you selected to monitor.');
-          // Reload after external calls; conditional write prevents disconnect/sync races.
-          const user = await read(active.userKey);
-          attach(user.value, provider, profile, token);
-          await write(active.userKey, user.value, user.etag);
-          return redirect(`${frontend}/account?connected=1`, [cookie('ironinbox_oauth', '', 0)]);
-        }
+  if (state.value.expectedSubject && state.value.expectedSubject !== profile.subject) {
+    throw fail(400, 'Choose the account you selected to monitor.');
+  }
+
+  // Reload the user record before attaching the mailbox.
+  const user = await read(active.userKey);
+
+  if (!user) throw fail(401, 'Account no longer exists.');
+
+requirePermission(user.value.role, PERMISSIONS.MANAGE_MONITORING);
+
+if (user.value.demoAccess === true || user.value.demoMembership) {
+  throw fail(403, 'Demo accounts cannot connect real mailboxes.');
+}
+
+attach(user.value, provider, profile, token);
+  await write(active.userKey, user.value, user.etag);
+
+  return redirect(`${frontend}/account?connected=1`, [
+    cookie('ironinbox_oauth', '', 0),
+  ]);
+}
         const user = await identityUser(provider, profile);
         return redirect(`${frontend}/login`, [await createSession(user.value.uid), cookie('ironinbox_oauth', '', 0)]);
       }
@@ -426,16 +531,25 @@ if (request.method === 'POST' &&
       if (!active) throw fail(401, 'Please sign in.');
       const { user: record, userKey, session, sessionKey } = active;
       const user = record.value;
-      if (request.method === 'GET' && ['/api/auth/status', '/api/gmail/status'].includes(path)) return json(200, {
-        connected: true, uid: user.uid, email: user.email, displayName: user.displayName, loginProvider: user.loginProvider,
-        mailboxes: Object.values(user.mailboxes).map(publicMailbox),
-      });
+     if (request.method === 'GET' && ['/api/auth/status', '/api/gmail/status'].includes(path)) return json(200, {
+  connected: true,
+  uid: user.uid,
+  email: user.email,
+  displayName: user.displayName,
+  loginProvider: user.loginProvider,
+  role: normalizeRole(user.role),
+  mailboxes: Object.values(user.mailboxes).map(publicMailbox),
+});
       if (request.method === 'POST' && path === '/api/auth/logout') {
         await storage.remove(sessionKey, session.etag);
         return json(200, { signedOut: true }, [cookie('ironinbox_session', '', 0)]);
       }
       if (request.method === 'POST' && path === '/api/data/wipe') {
-        user.mailboxes = {};
+  requirePermission(user.role, PERMISSIONS.MANAGE_ROLES);
+    if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts are read-only.');
+  }
+  user.mailboxes = {};
         delete user.settings;
         delete user.workspace;
         if (user.legacyWorkspaceKey) {
@@ -446,14 +560,97 @@ if (request.method === 'POST' &&
         await write(userKey, user, record.etag);
         return json(200, { wiped: true });
       }
-      if (request.method === 'GET' && path === '/api/workspace') return json(200, user.workspace ? { saved: true, ...user.workspace } : { saved: false });
-      if (request.method === 'POST' && path === '/api/workspace') {
-        user.workspace = parseWorkspace(await readJson(request));
-        await write(userKey, user, record.etag);
-        return json(200, { saved: true, ...user.workspace });
-      }
+
+if (request.method === 'GET' && path === '/api/demo/stats') {
+  const role = normalizeRole(user.role);
+
+  if (role === 'viewer') {
+    if (!user.demoMembership) {
+      throw fail(403, 'Demo access is not authorized.');
+    }
+
+    await resolveWorkspaceOwner(user);
+  } else if (role === 'admin') {
+    if (
+      user.demoAccess !== true ||
+      !Array.isArray(user.demoViewers)
+    ) {
+      throw fail(403, 'Demo access is not authorized.');
+    }
+  } else {
+    throw fail(403, 'Demo access is not authorized.');
+  }
+
+  return json(200, {
+    demo: true,
+    stats: publicDemoStats(),
+  });
+}
+
+      if (request.method === 'GET' && path === '/api/workspace') {
+  const role = normalizeRole(user.role);
+
+  if (role === 'viewer') {
+    if (!user.demoMembership) {
+      throw fail(403, 'You do not have access to a demo workspace.');
+    }
+
+    await resolveWorkspaceOwner(user);
+
+return json(200, {
+  saved: true,
+  incidents: publicDemoIncidents().map(publicViewerIncident),
+  riskThreshold: DEFAULT_THRESHOLD,
+  keywords: [],
+  detectionOptions: {},
+  detectionActions: {},
+  readOnly: true,
+});
+  }
+
+  requirePermission(role, PERMISSIONS.VIEW_KEYWORDS);
+  if (
+  role === 'admin' &&
+  user.loginProvider === 'supabase' &&
+  user.demoAccess === true &&
+  Array.isArray(user.demoViewers)
+) {
+  return json(200, {
+    saved: true,
+    incidents: publicDemoIncidents(),
+    riskThreshold: DEFAULT_THRESHOLD,
+    keywords: [],
+    detectionOptions: {},
+    detectionActions: {},
+    readOnly: true,
+  });
+}
+
+  return json(
+    200,
+    user.workspace
+      ? { saved: true, ...user.workspace }
+      : { saved: false }
+  );
+}
+
+if (request.method === 'POST' && path === '/api/workspace') {
+  requirePermission(user.role, PERMISSIONS.MANAGE_MONITORING);
+
+  if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts are read-only.');
+  }
+
+  user.workspace = parseWorkspace(await readJson(request));
+  await write(userKey, user, record.etag);
+  return json(200, { saved: true, ...user.workspace });
+}
       if (request.method === 'POST' && ['/api/mailboxes/disconnect', '/api/mailboxes/monitoring', '/api/gmail/disconnect'].includes(path)) {
-        const body = await readJson(request);
+  requirePermission(user.role, PERMISSIONS.MANAGE_MONITORING);
+    if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts cannot modify mailboxes.');
+  }
+  const body = await readJson(request);
         const mailbox = ownedMailbox(user, body.mailboxId);
         if (!mailbox) throw fail(404, 'Mailbox not found.');
         if (path === '/api/mailboxes/monitoring') {
@@ -464,7 +661,11 @@ if (request.method === 'POST' &&
         return json(200, { mailboxes: Object.values(user.mailboxes).map(publicMailbox) });
       }
       if (request.method === 'POST' && ['/api/mailboxes/sync', '/api/gmail/sync'].includes(path)) {
-        const body = await readJson(request);
+  requirePermission(user.role, PERMISSIONS.MANAGE_MONITORING);
+  if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts cannot modify mailboxes.');
+  }
+  const body = await readJson(request);
         const mailbox = body.mailboxId ? ownedMailbox(user, body.mailboxId) : Object.values(user.mailboxes).find(item => item.provider === 'gmail');
         if (!mailbox) throw fail(404, 'Mailbox not found.');
         if (!mailbox.monitoring) throw fail(409, 'Monitoring is paused for this mailbox.');
@@ -486,7 +687,11 @@ if (request.method === 'POST' &&
         return json(200, { added: synced.emails.length, messages: clientMessages(user), lastSyncedAt: mailbox.lastSyncedAt, hasMore: synced.hasMore });
       }
       if (request.method === 'POST' && path === '/api/emails/disposition') {
-        const body = await readJson(request);
+  requirePermission(user.role, PERMISSIONS.MANAGE_EMAILS);
+    if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts are read-only.');
+  }
+  const body = await readJson(request);
         if (!Array.isArray(body.ids) || body.ids.some(id => typeof id !== 'string') || !['flagged', 'safe'].includes(body.disposition)) throw fail(400, 'ids[] and disposition (flagged|safe) are required.');
         let updated = 0;
         for (const id of new Set(body.ids)) {
@@ -503,11 +708,18 @@ if (request.method === 'POST' &&
       // Re-grade already-synced mail with new keywords, options or sensitivity.
       // No Gmail/Graph calls, so the Settings slider takes effect immediately.
       if (request.method === 'POST' && path === '/api/emails/regrade') {
-        user.settings = gradingSettings(await readJson(request));
+  requirePermission(user.role, PERMISSIONS.MANAGE_EMAILS);
+    if (user.demoAccess === true || user.demoMembership) {
+    throw fail(403, 'Demo accounts are read-only.');
+  }
+  user.settings = gradingSettings(await readJson(request));
         await write(userKey, user, record.etag);
         return json(200, { messages: clientMessages(user), threshold: user.settings.threshold });
       }
-      if (request.method === 'GET' && path === '/api/emails') return json(200, { messages: clientMessages(user) });
+      if (request.method === 'GET' && path === '/api/emails') {
+         requirePermission(user.role, PERMISSIONS.VIEW_EMAILS);
+         return json(200, { messages: clientMessages(user) });
+}
       return json(404, { error: 'Not found.' });
     } catch (error) {
       const status = error.status || ([412, 404].includes(error.statusCode) ? 409 : 500);
