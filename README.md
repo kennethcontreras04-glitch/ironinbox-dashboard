@@ -40,6 +40,8 @@ Username/password accounts use salted scrypt hashes and a persistent limit of te
 
 Detection settings and incident edits persist in the encrypted user workspace. The latest dashboard, notifications, and incident workflows from main are preserved. Stars/read markers and some preferences remain browser-side features; role previews are not backend authorization. Mailbox authorization is enforced on the server.
 
+AI assistance: Claude (Anthropic) was used for code review, test suggestions, and editing. All code, results, and claims were reviewed and verified by the IronInbox team.
+
 ## Checks
 
 ```sh
